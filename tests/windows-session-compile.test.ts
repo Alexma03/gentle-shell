@@ -30,8 +30,11 @@ function isCompilerEntry(value: unknown): value is CompilerEntry {
 	const entry = value as Record<string, unknown>;
 	return Object.keys(entry).sort().join(",") === "code,column,line"
 		&& typeof entry.code === "string" && /^CS[0-9]{4}(?![\s\S])/.test(entry.code)
-		&& Number.isInteger(entry.line) && entry.line >= 0 && entry.line <= maxLocation
-		&& Number.isInteger(entry.column) && entry.column >= 0 && entry.column <= maxLocation;
+		&& typeof entry.line === "number" && Number.isInteger(entry.line) && entry.line >= 0 && entry.line <= maxLocation
+		&& typeof entry.column === "number" && Number.isInteger(entry.column) && entry.column >= 0 && entry.column <= maxLocation;
+}
+function isCompilerEntries(value: unknown): value is CompilerEntry[] {
+	return Array.isArray(value) && value.length > 0 && value.length <= maxErrors && value.every(isCompilerEntry);
 }
 
 export function parseCompilerControl(stdout: string): CompilerControl | undefined {
@@ -50,24 +53,26 @@ export function parseCompilerControl(stdout: string): CompilerControl | undefine
 		|| !["completed", "source-parse", "source-contract", "compile", "control-failure"].includes(record.stage as string)
 		|| !["not-compiled", "compile-success", "compile-errors"].includes(record.outcome as string)
 		|| !Array.isArray(record.errorlist) || record.errorlist.length > maxErrors || !record.errorlist.every(isCompilerEntry)) return undefined;
-	if (record.warnings !== undefined && (!Array.isArray(record.warnings) || record.warnings.length === 0 || record.warnings.length > maxErrors || !record.warnings.every(isCompilerEntry))) return undefined;
+	const warnings = record.warnings;
 	const outcome = record.outcome as CompilerOutcome;
 	const compileSuccess = outcome === "compile-success" && record.sourceExtracted && record.success && record.stage === "completed" && record.errorlist.length === 0;
 	const compileErrors = outcome === "compile-errors" && record.sourceExtracted && !record.success && record.stage === "compile" && record.errorlist.length > 0;
 	const notCompiledStage = (record.stage === "source-parse" && !record.sourceExtracted)
 		|| (record.stage === "source-contract" && !record.sourceExtracted)
 		|| record.stage === "control-failure";
-	const notCompiled = outcome === "not-compiled" && !record.success && record.errorlist.length === 0 && record.warnings === undefined && notCompiledStage;
+	const notCompiled = outcome === "not-compiled" && !record.success && record.errorlist.length === 0 && warnings === undefined && notCompiledStage;
 	if (!compileSuccess && !compileErrors && !notCompiled) return undefined;
-	return Object.freeze({
+	const base = {
 		kind: record.kind,
 		success: record.success,
 		sourceExtracted: record.sourceExtracted,
 		stage: record.stage as CompilerControl["stage"],
 		outcome,
 		errorlist: Object.freeze([...record.errorlist]),
-		...(record.warnings === undefined ? {} : { warnings: Object.freeze([...record.warnings]) }),
-	});
+	};
+	if (warnings === undefined) return Object.freeze(base);
+	if (!isCompilerEntries(warnings)) return undefined;
+	return Object.freeze({ ...base, warnings: Object.freeze([...warnings]) });
 }
 
 function control(value: Record<string, unknown>): string {

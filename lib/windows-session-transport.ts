@@ -163,7 +163,9 @@ const createDetachedChildCleanup = (child: SpawnedHost): DetachedChildCleanup =>
 };
 /** A syntactically valid private envelope can contain one untrusted pipe frame. */
 class InvalidClientWireError extends Error {}
-const controlId = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9-]{1,128}$/.test(value);
+function controlId(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9-]{1,128}$/.test(value); }
+function plainRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+const hostErrors = (value: unknown): value is HostReply["error"] => typeof value === "string" && ["unavailable", "unsafe", "busy", "not_found", "invalid"].includes(value);
 const hasPrivateData = (value: unknown): boolean => {
 	if (!value || typeof value !== "object") return false;
 	for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
@@ -189,20 +191,20 @@ export function parseWindowsHostFrame(line: string): HostReply {
 		const result = frame.result as Record<string, unknown>;
 		const partial = Object.keys(result).length === 1 && result.state === "partial";
 		const initialized = Object.keys(result).length === 2 && result.state === "initialized" && result.bootstrap === "complete";
-		const enumerated = Object.keys(result).length === 3 && result.state === "initialized" && result.bootstrap === "complete" && Number.isSafeInteger(result.entries) && (result.entries as number) >= 0 && (result.entries as number) <= 64;
+		const enumerated = Object.keys(result).length === 3 && result.state === "initialized" && result.bootstrap === "complete" && typeof result.entries === "number" && Number.isSafeInteger(result.entries) && result.entries >= 0 && result.entries <= 64;
 		let publicResult: HostReply["result"];
 		if (partial || initialized || enumerated) publicResult = Object.freeze({ ...result }) as HostState;
 		else {
 			try {
 				if (Object.keys(result).length === 4) publicResult = validRecord(result);
-				else if (Object.keys(result).length === 1 && Array.isArray(result.records) && result.records.length <= 64) publicResult = Object.freeze({ records: Object.freeze(result.records.map((record) => validRecord(record as Record<string, unknown>))) });
+				else if (Object.keys(result).length === 1 && Array.isArray(result.records) && result.records.length <= 64) publicResult = Object.freeze({ records: Object.freeze(result.records.map((record) => validRecord(record))) });
 				else throw new Error();
 			} catch { throw safeError("invalid Windows transport frame"); }
 		}
 		return Object.freeze({ requestId: frame.requestId, ok: true, result: publicResult! });
 	}
-	if (keys.length !== 3 || typeof frame.error !== "string" || !["unavailable", "unsafe", "busy", "not_found", "invalid"].includes(frame.error)) throw safeError("invalid Windows transport frame");
-	return Object.freeze({ requestId: frame.requestId, ok: false, error: frame.error as HostReply["error"] });
+	if (keys.length !== 3 || !hostErrors(frame.error)) throw safeError("invalid Windows transport frame");
+	return Object.freeze({ requestId: frame.requestId, ok: false, error: frame.error });
 }
 
 /** Decode the helper's bounded private events before allowing application acknowledgement. */
@@ -583,10 +585,12 @@ export class WindowsSessionTransportHost {
 }
 
 type WindowsRecord = PresenceRecord;
-const validRecord = (value: Record<string, unknown>): WindowsRecord => {
-	const keys = Object.keys(value);
-	if (keys.length !== 4 || !["version", "sessionId", "endpoint", "createdAt"].every((key) => keys.includes(key)) || value.version !== 1 || typeof value.sessionId !== "string" || !SESSION.test(value.sessionId) || typeof value.endpoint !== "string" || !PIPE.test(value.endpoint) || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) throw new SessionPresenceError("invalid_presence", "invalid presence record");
-	return Object.freeze({ version: 1, sessionId: value.sessionId, endpoint: value.endpoint, createdAt: value.createdAt });
+const validRecord = (value: unknown): WindowsRecord => {
+	if (!plainRecord(value)) throw new SessionPresenceError("invalid_presence", "invalid presence record");
+	const record = value;
+	const keys = Object.keys(record);
+	if (keys.length !== 4 || !["version", "sessionId", "endpoint", "createdAt"].every((key) => keys.includes(key)) || record.version !== 1 || typeof record.sessionId !== "string" || !SESSION.test(record.sessionId) || typeof record.endpoint !== "string" || !PIPE.test(record.endpoint) || typeof record.createdAt !== "number" || !Number.isSafeInteger(record.createdAt) || record.createdAt < 0) throw new SessionPresenceError("invalid_presence", "invalid presence record");
+	return Object.freeze({ version: 1, sessionId: record.sessionId, endpoint: record.endpoint, createdAt: record.createdAt });
 };
 const registryError = (error: unknown): never => {
 	if (error instanceof SessionPresenceError) throw error;
@@ -667,7 +671,7 @@ export class WindowsSessionPresenceRegistry {
 	presencePath(_record: PresenceRecord) { throw new SessionPresenceError("unsafe_path", "unsafe transport path"); }
 	async publish(record: PresenceRecord) { try { await this.host.request("publish", { record: validRecord(record as unknown as Record<string, unknown>) }); } catch { registryError(undefined); } }
 	async list(excludeSessionId?: string): Promise<readonly SessionPresenceCandidate[]> { return (await this.listActivations(excludeSessionId)).map((record) => Object.freeze({ sessionId: record.sessionId, reachability: "unknown" as const })); }
-	async listActivations(excludeSessionId?: string): Promise<readonly WindowsRecord[]> { try { const value = await this.host.request("list", { ...(excludeSessionId === undefined ? {} : { excludeSessionId }) }); if (!Array.isArray(value.records) || value.records.length > 64) throw new Error(); return Object.freeze(value.records.map((record) => validRecord(record as Record<string, unknown>))); } catch { registryError(undefined); } }
+	async listActivations(excludeSessionId?: string): Promise<readonly WindowsRecord[]> { try { const value = await this.host.request("list", { ...(excludeSessionId === undefined ? {} : { excludeSessionId }) }); if (!Array.isArray(value.records) || value.records.length > 64) throw new Error(); return Object.freeze(value.records.map((record) => validRecord(record))); } catch { registryError(undefined); } }
 	async resolve(sessionId: string): Promise<WindowsRecord> { try { return validRecord(await this.host.request("resolve", { sessionId })); } catch { registryError(undefined); } }
 	async removeOwn(record: PresenceRecord) { try { await this.host.request("remove", { record: validRecord(record as unknown as Record<string, unknown>) }); } catch { /* identity-bound owned cleanup is intentionally best effort */ } }
 	async startListener(sessionId: string): Promise<WindowsRecord> {
@@ -705,15 +709,17 @@ export class WindowsActiveSessionListener {
 		this.registry.setListenerFailure(listenerFailure);
 		try {
 			const record = await this.registry.startListener(this.sessionID);
-			if (this.state !== "starting" || this.generation !== generation) {
+			if (this.status !== "starting" || this.generation !== generation) {
 				await this.registry.stopListener(record);
-				throw new SessionPresenceError("io_error", this.state === "closed" ? "listener is closed" : "listener failed");
+				const state = this.status;
+				throw new SessionPresenceError("io_error", state === "closed" ? "listener is closed" : "listener failed");
 			}
 			this.record = record;
 			this.state = "active";
 		} catch (error) {
-			const failed = this.state === "idle" && this.generation === generation && this.failure !== undefined;
-			if (this.state !== "closed" && this.generation === generation) this.state = "idle";
+			const state = this.status;
+			const failed = state === "idle" && this.generation === generation && this.failure !== undefined;
+			if (state !== "closed" && this.generation === generation) this.state = "idle";
 			if (failed) throw new SessionPresenceError("io_error", "listener failed");
 			throw error;
 		}

@@ -1343,9 +1343,12 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 			const input = params as { recipient_session_id?: unknown; message?: unknown };
 			if (!transport) return text("Error: session messaging is not ready.", { error: "not ready" });
 			if (typeof input.message !== "string" || Buffer.byteLength(input.message, "utf8") > 8192) return text("Error: recipient session ID or message is invalid.", { error: "invalid input" });
-			let recipient = input.recipient_session_id;
+			let recipient: string | undefined;
 			let activation: PresenceRecord | undefined;
-			if (recipient !== undefined && !validTransportSessionId(recipient)) return text("Error: recipient session ID or message is invalid.", { error: "invalid input" });
+			if (input.recipient_session_id !== undefined) {
+				if (!validTransportSessionId(input.recipient_session_id)) return text("Error: recipient session ID or message is invalid.", { error: "invalid input" });
+				recipient = input.recipient_session_id;
+			}
 			if (recipient === undefined) {
 				try {
 					const candidates = (await transport.listener.registry.listActivations(transport.sessionId)).filter((candidate) => candidate.sessionId !== transport.sessionId);
@@ -1368,9 +1371,10 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 					return text("Error: session discovery is unavailable.", { error: "unavailable" });
 				}
 			}
+			if (recipient === undefined || !validTransportSessionId(recipient)) return text("Error: recipient session ID or message is invalid.", { error: "invalid input" });
 			if (recipient === transport.sessionId) return text("Error: cannot send a message to the active session.", { error: "self" });
 			try {
-				const accepted = await transport.client.sendNotification(recipient!, input.message, { signal, expectedActivation: activation, beforeConnect: () => activeTransportFor(ctx) === transport });
+				const accepted = await transport.client.sendNotification(recipient, input.message, { signal, expectedActivation: activation, beforeConnect: () => activeTransportFor(ctx) === transport });
 				return activeTransportFor(ctx) === transport ? text(`Message ${accepted.id} from ${transport.sessionId} to ${recipient} accepted for delivery; it is not a delivery or read receipt.`, { gentleAgents: { messageId: accepted.id, senderSessionId: transport.sessionId, recipientSessionId: recipient, state: "accepted" } }) : text("Error: session messaging is not ready.", { error: "stale" });
 			} catch {
 				return text("Error: session message was not accepted.", { error: "not accepted" });

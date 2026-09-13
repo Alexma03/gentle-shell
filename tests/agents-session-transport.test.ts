@@ -6,11 +6,11 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile
 import { createConnection, createServer, Socket } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import nodeTest from "node:test";
+import nodeTest, { type TestContext } from "node:test";
 const test = process.platform === "win32" ? nodeTest.skip : nodeTest;
-import { ActiveSessionClient, ActiveSessionClientError, ActiveSessionListener, FrameDecoder, MAX_FRAME_BYTES, SessionPresenceError, SessionPresenceRegistry, TransportProtocolError, encodeAckFrame, encodeNotificationFrame, isSafeRuntimeParent, type PresenceRecord } from "../lib/agents-session-transport.ts";
+import { ActiveSessionClient, ActiveSessionClientError, ActiveSessionListener, FrameDecoder, MAX_FRAME_BYTES, SessionPresenceError, SessionPresenceRegistry, TransportProtocolError, encodeAckFrame, encodeNotificationFrame, isSafeRuntimeParent, type PresenceRecord, type ReceivedNotification } from "../lib/agents-session-transport.ts";
 
-async function registry(t: test.TestContext, beforeCandidateOpen?: () => Promise<void>) {
+async function registry(t: TestContext, beforeCandidateOpen?: () => Promise<void>) {
 	const home = await mkdtemp(join(tmpdir(), "g-"));
 	await chmod(home, 0o755);
 	await mkdir(join(home, "gentle-agents"), { mode: 0o755 });
@@ -324,7 +324,7 @@ test("rejects strict programmatic fields and ack conditional violations", () => 
 	for (const ack of [{ version: 1, kind: "ack", id: "message-1", accepted: true, error: "rejected" }, { version: 1, kind: "ack", id: "message-1", accepted: false }, { version: 1, kind: "ack", id: "message-1", accepted: false, error: "forged" }]) protocolRejected(() => encodeAckFrame(ack as never), "invalid_frame");
 });
 
-async function listener(t: test.TestContext, callback = async () => {}, options?: object) {
+async function listener(t: TestContext, callback: (value: ReceivedNotification) => Promise<void> = async (_value: ReceivedNotification) => {}, options?: object) {
 	const instance = new ActiveSessionListener(await registry(t), "recipient", callback, options as never);
 	assert.equal(instance.record, undefined);
 	await instance.start();
@@ -478,7 +478,7 @@ test("contains runtime server errors in one fixed cleanup", async (t) => {
 });
 
 const clientRejected = (operation: Promise<unknown>, code: string) => assert.rejects(operation, (error: unknown) => error instanceof ActiveSessionClientError && error.code === code);
-async function raw(t: test.TestContext, transport: SessionPresenceRegistry, id: string, reply?: Buffer | null, createdAt?: number) {
+async function raw(t: TestContext, transport: SessionPresenceRegistry, id: string, reply?: Buffer | null, createdAt?: number) {
 	const record = await transport.record(id, createdAt), server = createServer((socket) => { socket.on("error", () => {}); socket.on("data", () => { if (reply !== null) socket.end(reply); }); });
 	await new Promise<void>((resolveListen, rejectListen) => { server.once("error", rejectListen); server.listen(record.endpoint, resolveListen); });
 	await transport.publish(record);
@@ -619,7 +619,7 @@ test("settles partial EOF, socket error, and listener close without leaking admi
 });
 
 test("bounds callback deadlines and ignores late settlement", async (t) => {
-	const clock = fakeScheduler(), pending = new Map<string, ReturnType<typeof deferred>>(), unhandled: unknown[] = [];
+	const clock = fakeScheduler(), pending = new Map<string, ReturnType<typeof deferred<void>>>(), unhandled: unknown[] = [];
 	const onUnhandled = (error: unknown) => unhandled.push(error);
 	process.on("unhandledRejection", onUnhandled);
 	t.after(() => process.off("unhandledRejection", onUnhandled));
@@ -689,7 +689,7 @@ const endpointCleanupDiagnostic = (kind: "socket" | "file" | "symlink", original
 	replacementSurvived: after !== undefined,
 	afterIdentityMatchesReplacement: sameEndpointIdentity(after, replacement),
 });
-async function preservesReplacementEndpoint(t: test.TestContext, kind: "socket" | "file" | "symlink") {
+async function preservesReplacementEndpoint(t: TestContext, kind: "socket" | "file" | "symlink") {
 	let replacement: ReturnType<typeof createServer> | undefined;
 	let endpoint = "", replacementStat: Awaited<ReturnType<typeof lstat>> | undefined;
 	let endpointAbsentBeforeReplacement = false, closeFailed = false;
