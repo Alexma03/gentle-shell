@@ -18,7 +18,7 @@ type Callback = { event: "callback"; requestId: string; pid: number; id: string;
 type Pending = { timer: ReturnType<typeof setTimeout>; settled: boolean; resolve: (reply: Reply) => void; reject: (error: Error) => void };
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
 type SpawnedProcess = EventEmitter & {
-	pid: number | undefined;
+	pid?: number | undefined;
 	stdin: (NodeJS.WritableStream & EventEmitter) | null;
 	stdout: (NodeJS.ReadableStream & EventEmitter) | null;
 	stderr: (NodeJS.ReadableStream & EventEmitter) | null;
