@@ -135,6 +135,7 @@ async function captureOwnedRoutes(t: TestContext): Promise<{ captures: Capture[]
 		cp.spawnSync = fakeSpawn;
 		syncBuiltinESMExports();
 		let fallbackRoot: string | undefined;
+		let fallbackCalls: ExpectedCall[] = [];
 	if (process.platform === "win32") {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "gentle-pi-codegraph-contract-"));
 		t.after(() => rmSync(fallbackRoot!, { recursive: true, force: true }));
@@ -149,6 +150,7 @@ async function captureOwnedRoutes(t: TestContext): Promise<{ captures: Capture[]
 		t.after(() => { if (previousUpperPath === undefined) delete process.env.PATH; else process.env.PATH = previousUpperPath; });
 		process.env.Path = fallbackRoot;
 		process.env.PATH = fallbackRoot;
+		fallbackCalls = [{ kind: "execFile", command: process.execPath, args: [join(fallbackRoot, "node_modules", "@colbymchenry", "codegraph", "entry.js"), "init", cwd] }];
 	}
 	// The fixed query prevents accidental cache misses from becoming a fake proof.
 		const query = "?windows-hidden-contract";
@@ -166,7 +168,7 @@ async function captureOwnedRoutes(t: TestContext): Promise<{ captures: Capture[]
 		const graphResult = await trace(captures, traces, "CodeGraph init", () => graph.execute("capture", { operation: "init" }, undefined, undefined, { cwd } as never), [
 			{ kind: "execFileSync", command: "git", args: ["rev-parse", "--show-toplevel"] },
 			{ kind: "execFile", command: "codegraph", args: ["init", cwd] },
-			...(process.platform === "win32" ? [{ kind: "execFile", command: process.execPath, args: [join(fallbackRoot!, "node_modules", "@colbymchenry", "codegraph", "entry.js"), "init", cwd] }] : []),
+			...fallbackCalls,
 		]);
 		const graphText = String((graphResult as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "");
 		assert.match(graphText, /indexed/, "CodeGraph must return the fixture command result");
