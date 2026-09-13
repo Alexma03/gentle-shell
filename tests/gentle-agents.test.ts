@@ -78,7 +78,7 @@ function mouse(
 ): TuiMouseEvent {
 	return { type, button, x, y, screenX: x, screenY: y, width, height, shift: false, alt: false, ctrl: false };
 }
-const root = mkdtempSync(join(tmpdir(), "gentle-agents-ext-"));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "gentle-agents-ext-")));
 const activeSessionTeardowns = new Set<() => Promise<void>>();
 const stopActiveSessions = () => Promise.all([...activeSessionTeardowns].map((shutdown) => shutdown()));
 afterEach(stopActiveSessions);

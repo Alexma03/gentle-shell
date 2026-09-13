@@ -231,9 +231,16 @@ test("generated runtime modules and packed-package checks are deterministic", ()
 		assert.match(isolatedInstall, /\["install"[^\]]*"--ignore-scripts"(?!\=false)/s, `${name} must isolate installation scripts`);
 		assert.doesNotMatch(isolatedInstall, /\["install"[^\]]*"--ignore-scripts=false"/s, `${name} must not enable postinstall`);
 	}
-	assert.match(packedRunner, /execFileSync\("where\.exe", \["npm"\]/);
-	assert.match(packedRunner, /could not resolve npm-cli\.js without a command shell/);
-	assert.doesNotMatch(packedRunner, /ComSpec|cmd\.exe/);
+	const windowsNpmInvocation = readNamedFunction(packedRunner, "windowsNpmInvocation");
+	const runNpmWithEnv = readNamedFunction(packedRunner, "runNpmWithEnv");
+	assert.match(windowsNpmInvocation, /execFileSync\("where\.exe", \["npm"\]/);
+	assert.match(windowsNpmInvocation, /return \{ file: process\.execPath, prefix: \[installedCli\] \}/);
+	assert.match(windowsNpmInvocation, /return \{ file: path, prefix: \[\] \}/);
+	assert.match(windowsNpmInvocation, /could not resolve npm-cli\.js without a command shell/);
+	assert.doesNotMatch(windowsNpmInvocation, /ComSpec|cmd\.exe/);
+	assert.match(runNpmWithEnv, /execFileSync\(invocation\.file, \[\.\.\.invocation\.prefix, \.\.\.arguments_\]/);
+	assert.match(runNpmWithEnv, /\.\.\.options, env/);
+	assert.doesNotMatch(packedRunner, /shell\s*:\s*true/);
 	assert.match(packedRunner, /review", "capabilities", "--contract", "gentle-ai\.review-integration\/v2"/);
 	assert.doesNotMatch(packedRunner, /git-commit-transaction|transaction runner/i);
 });
