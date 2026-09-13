@@ -397,7 +397,7 @@ test("caps held partial connections and rejects callback failures", async (t) =>
 	const instance = await listener(t, async () => { throw new Error("no"); });
 	t.after(() => instance.close());
 	const held = await Promise.all(Array.from({ length: 8 }, async () => { const socket = createConnection(instance.record!.endpoint); await once(socket, "connect"); return socket; }));
-	for (let turns = 0; instance.activeConnections < 8 && turns < 20; turns++) await new Promise<void>((resolve) => setImmediate(resolve));
+	await poll("held connections", () => instance.activeConnections === 8);
 	assert.equal(instance.activeConnections, 8);
 	const ninth = createConnection(instance.record!.endpoint);
 	await once(ninth, "close");
