@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - test/pr799-integration-diagnosis
   pull_request:
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   verify:
+    if: github.ref != 'refs/heads/test/pr799-integration-diagnosis' || github.repository == 'decode2/gentle-pi'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -48,6 +50,7 @@ jobs:
         run: pnpm run test:packed-package
 
   session-transport-macos:
+    if: github.ref != 'refs/heads/test/pr799-integration-diagnosis' || github.repository == 'decode2/gentle-pi'
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -77,6 +80,7 @@ jobs:
         run: pnpm run check:runtime-modules
 
   review-repository-windows:
+    if: github.ref != 'refs/heads/test/pr799-integration-diagnosis' || github.repository == 'decode2/gentle-pi'
     runs-on: windows-latest
     steps:
       - name: Checkout
