@@ -26,7 +26,8 @@ type SpawnedProcess = EventEmitter & {
 	signalCode: NodeJS.Signals | null;
 	kill(signal?: NodeJS.Signals): boolean;
 };
-type SpawnProcess = (...args: Parameters<typeof spawn>) => SpawnedProcess;
+type SpawnProcess = (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] }) => SpawnedProcess;
+const defaultSpawn: SpawnProcess = (command, args, options) => spawn(command, args, options);
 
 class MemoryProcess extends EventEmitter implements SpawnedProcess {
 	pid = undefined;
@@ -51,7 +52,7 @@ const bounded = async <T>(label: string, operation: Promise<T>) => {
 	finally { if (timer) clearTimeout(timer); }
 };
 
-function child(agentHome: string, spawnProcess: SpawnProcess = spawn) {
+function child(agentHome: string, spawnProcess: SpawnProcess = defaultSpawn) {
 	const process = spawnProcess(globalThis.process.execPath, ["--experimental-strip-types", fixture], {
 		env: { GENTLE_AGENT_HOME: agentHome }, stdio: ["pipe", "pipe", "pipe"],
 	});
