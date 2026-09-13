@@ -18,7 +18,7 @@ type Callback = { event: "callback"; requestId: string; pid: number; id: string;
 type Pending = { timer: ReturnType<typeof setTimeout>; settled: boolean; resolve: (reply: Reply) => void; reject: (error: Error) => void };
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
 type SpawnedProcess = EventEmitter & {
-	pid: number | undefined;
+	pid?: number | undefined;
 	stdin: (NodeJS.WritableStream & EventEmitter) | null;
 	stdout: (NodeJS.ReadableStream & EventEmitter) | null;
 	stderr: (NodeJS.ReadableStream & EventEmitter) | null;
@@ -26,7 +26,8 @@ type SpawnedProcess = EventEmitter & {
 	signalCode: NodeJS.Signals | null;
 	kill(signal?: NodeJS.Signals): boolean;
 };
-type SpawnProcess = (...args: Parameters<typeof spawn>) => SpawnedProcess;
+type SpawnProcess = (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] }) => SpawnedProcess;
+const defaultSpawn: SpawnProcess = (command, args, options) => spawn(command, args, options);
 
 class MemoryProcess extends EventEmitter implements SpawnedProcess {
 	pid = undefined;
@@ -51,7 +52,7 @@ const bounded = async <T>(label: string, operation: Promise<T>) => {
 	finally { if (timer) clearTimeout(timer); }
 };
 
-function child(agentHome: string, spawnProcess: SpawnProcess = spawn) {
+function child(agentHome: string, spawnProcess: SpawnProcess = defaultSpawn) {
 	const process = spawnProcess(globalThis.process.execPath, ["--experimental-strip-types", fixture], {
 		env: { GENTLE_AGENT_HOME: agentHome }, stdio: ["pipe", "pipe", "pipe"],
 	});
