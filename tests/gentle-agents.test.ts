@@ -390,7 +390,7 @@ test("overlapping session transport startups preserve ownership and shutdown wai
 			registries.set(id, registry);
 			return registry;
 		},
-		createListener: (registry, id) => ({ registry, start: async () => { listenerStarts.push(id); }, close: async () => { listenerCloses.push(id); await registry.close?.(); } }),
+		createListener: (registry, id) => ({ registry, closesRegistry: true, start: async () => { listenerStarts.push(id); }, close: async () => { listenerCloses.push(id); await registry.close?.(); } }),
 		createClient: (_registry, id) => ({ close: () => { clientCloses.push(id); }, sendNotification: async () => ({ id: "unused", accepted: true }) }),
 	};
 	runtime.deps.sessionTransport = transport;
@@ -595,7 +595,7 @@ test("replacement closes a gated stale listener once and leaves the successor ow
 		},
 		createListener: (ownedRegistry, id, callback) => {
 			if (id === "alpha") alphaCallback = callback;
-			return { registry: ownedRegistry, start: async () => { if (id === "alpha") { alphaEntered = true; await alphaGate; } else betaStarted = true; }, close: async () => { if (id === "alpha") alphaCloses++; else betaCloses++; await ownedRegistry.close?.(); } };
+			return { registry: ownedRegistry, closesRegistry: true, start: async () => { if (id === "alpha") { alphaEntered = true; await alphaGate; } else betaStarted = true; }, close: async () => { if (id === "alpha") alphaCloses++; else betaCloses++; await ownedRegistry.close?.(); } };
 		},
 		createClient: (_registry, id) => { if (id === "beta") betaClientCreated = true; return { close: () => { if (id === "alpha") alphaClientCloses++; else betaClientCloses++; }, sendNotification: async () => ({ id: "unused", accepted: true }) }; },
 	};
@@ -2240,6 +2240,7 @@ test("session transport startup failure cleans the constructed Windows-capable t
 	gentleAgents(h.pi, {}, runtime.deps);
 	const { ctx } = fakeContext();
 	await h.fire("session_start", ctx);
+	await eventually(() => clientCloses === 1 && listenerCloses === 1 && registryCloses === 1, "startup failure cleanup completes");
 	assert.equal(clientCloses, 1);
 	assert.equal(listenerCloses, 1);
 	assert.equal(registryCloses, 1);
@@ -2265,6 +2266,7 @@ test("session transport adds host tools, forwards notifications, and closes on s
 	gentleAgents(h.pi, {}, runtime.deps);
 	const { ctx } = fakeContext();
 	await h.fire("session_start", ctx);
+	await eventually(() => listenerStarts === 1, "session transport listener starts");
 	assert.equal(listenerStarts, 1);
 	assert.ok(h.tools.has("orchestrator_session_id"));
 	assert.ok(h.tools.has("orchestrator_list"));
@@ -2296,6 +2298,7 @@ test("session transport accepts a notification while listener publication is sti
 	gentleAgents(h.pi, {}, runtime.deps);
 	const { ctx } = fakeContext();
 	await h.fire("session_start", ctx);
+	await eventually(() => h.sent.at(-1)?.message.customType === "gentle-agents.orchestrator-message", "publication callback completes");
 	assert.equal(h.sent.at(-1)?.message.customType, "gentle-agents.orchestrator-message");
 	assert.match(String(h.sent.at(-1)?.message.content), /during publication/);
 });
@@ -2328,6 +2331,7 @@ test("session transport selects a peer for outbound delivery and rejects stale c
 	gentleAgents(h.pi, {}, runtime.deps);
 	const { ctx, dialogs } = fakeContext();
 	await h.fire("session_start", ctx);
+	await eventually(() => callbacks.length === 1, "initial transport callback registration");
 	const result = await h.tools.get("orchestrator_send_message")!.execute("send", { message: "hello peer" }, undefined, undefined, ctx);
 	assert.deepEqual(dialogs, ["select:Select recipient orchestrator:Orchestrator alpha|Orchestrator beta"]);
 	assert.deepEqual(sent, [{ recipient: "alpha", message: "hello peer", expectedActivation: records[0] }]);
@@ -2335,6 +2339,7 @@ test("session transport selects a peer for outbound delivery and rejects stale c
 	const original = callbacks[0]!;
 	(ctx.sessionManager as unknown as { getSessionId(): string }).getSessionId = () => "s2";
 	await h.fire("session_start", ctx);
+	await eventually(() => closed === 2, "replacement closes the old client and listener");
 	assert.equal(closed, 2, "replacement closes the old client and listener before activating its successor");
 	await assert.rejects(original({ id: "late", senderSessionId: "alpha", message: "late callback" }), /stale session transport/);
 	await h.fire("session_shutdown", ctx);
