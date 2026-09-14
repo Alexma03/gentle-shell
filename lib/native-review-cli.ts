@@ -959,6 +959,27 @@ export const NATIVE_CLI_CONTRACTS = Object.freeze({
 	// negotiated START path Pi reads. The closed fields Pi consumes did not
 	// change between 2.6.0 and 2.7.0, so the columns match the 2.6.0 row.
 	"2.7.0": Object.freeze({ start: true, finalize: true, validate: true, bindSdd: true, status: true, inventory: true, reclaim: true, recover: true, abandon: true, quarantineLegacy: true, reconcileAuthority: true, repairLegacyAlias: true, mode: true, riskEvidence: false, hint: false, delivery: true }),
+	// Ground-truthed against the published v2.8.0 linux/amd64 binary from its
+	// signed release archive. The v2 lane still advertises capabilities/v2.5
+	// (protocol minor 5) with status/v7, consent/v3, and start/v4 schemas.
+	// The closed fields Pi consumes did not change between 2.7.0 and 2.8.0,
+	// so this row repeats 2.7.0. riskEvidence and hint remain dark because
+	// neither is proven to reach the negotiated START path Pi consumes.
+	"2.8.0": Object.freeze({ start: true, finalize: true, validate: true, bindSdd: true, status: true, inventory: true, reclaim: true, recover: true, abandon: true, quarantineLegacy: true, reconcileAuthority: true, repairLegacyAlias: true, mode: true, riskEvidence: false, hint: false, delivery: true }),
+	// v2.8.1 only changed runtime telemetry model attribution (gentle-ai#4536);
+	// the closed fields Pi consumes did not change between 2.8.0 and 2.8.1, so
+	// this row repeats 2.8.0 exactly. riskEvidence and hint remain dark
+	// because neither is proven to reach the negotiated START path Pi consumes.
+	"2.8.1": Object.freeze({ start: true, finalize: true, validate: true, bindSdd: true, status: true, inventory: true, reclaim: true, recover: true, abandon: true, quarantineLegacy: true, reconcileAuthority: true, repairLegacyAlias: true, mode: true, riskEvidence: false, hint: false, delivery: true }),
+	// v2.8.2 shipped OpenCode SDD preflight plugin fixes, community-tools RTK
+	// acquisition, and Claude Code Stop telemetry. The provider contract semver
+	// stays 1.2.0; the same pin re-mirrors bundle bytes that had drifted under
+	// that semver (lens inspection.status "unavailable", targeted-validator
+	// regressions/inspection members, seven Pi stop reason codes). None of
+	// those touch the closed START/STATUS fields this row negotiates, so it
+	// repeats 2.8.1 exactly. riskEvidence and hint remain dark because neither
+	// is proven to reach the negotiated START path Pi consumes.
+	"2.8.2": Object.freeze({ start: true, finalize: true, validate: true, bindSdd: true, status: true, inventory: true, reclaim: true, recover: true, abandon: true, quarantineLegacy: true, reconcileAuthority: true, repairLegacyAlias: true, mode: true, riskEvidence: false, hint: false, delivery: true }),
 });
 
 export interface NativeReviewProcessDiagnostics {
