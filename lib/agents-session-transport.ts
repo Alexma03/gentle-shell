@@ -18,20 +18,23 @@ export class SessionPresenceError extends Error {
 	constructor(code: Code, message: string) { super(message); this.code = code; this.name = "SessionPresenceError"; }
 }
 
-const fail = (code: Code, message: string): never => { throw new SessionPresenceError(code, message); };
+function fail(code: Code, message: string): never { throw new SessionPresenceError(code, message); }
 const uid = () => typeof process.getuid === "function" ? process.getuid() : undefined;
 const sameUser = (stat: { uid: number }) => uid() === undefined || stat.uid === uid();
-const sessionId = (value: unknown) => {
+function sessionId(value: unknown): string {
 	if (typeof value !== "string" || !SESSION.test(value)) fail("invalid_session", "invalid session ID");
 	return value;
-};
-const boundary = (error: unknown): never => {
+}
+function plainRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+}
+function boundary(error: unknown): never {
 	if (error instanceof SessionPresenceError) throw error;
-	const code = (error as NodeJS.ErrnoException).code;
+	const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
 	if (code === "ENOENT") fail("not_found", "presence not found");
 	if (code === "ELOOP") fail("unsafe_path", "unsafe transport path");
 	fail("io_error", "transport I/O failed");
-};
+}
 
 // The agent profile and its shared Gentle Agents parent belong to the host
 // runtime. Transport may validate them but must not tighten their permissions.
@@ -220,10 +223,11 @@ export class SessionPresenceRegistry {
 	}
 
 	private validate(value: unknown, expectedId?: string, expectedToken?: string): asserts value is PresenceRecord {
-		if (!value || typeof value !== "object" || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) fail("invalid_presence", "invalid presence record");
+		if (!plainRecord(value)) fail("invalid_presence", "invalid presence record");
 		const keys = Reflect.ownKeys(value);
 		if (keys.length !== 4 || !["version", "sessionId", "endpoint", "createdAt"].every((key) => keys.includes(key))) fail("invalid_presence", "invalid presence record");
-		const record = value as PresenceRecord;
+		if (value.version !== 1 || typeof value.sessionId !== "string" || typeof value.endpoint !== "string" || typeof value.createdAt !== "number") fail("invalid_presence", "invalid presence record");
+		const record: PresenceRecord = { version: 1, sessionId: value.sessionId, endpoint: value.endpoint, createdAt: value.createdAt };
 		if (record.version !== 1 || !Number.isSafeInteger(record.createdAt) || record.createdAt < 0) fail("invalid_presence", "invalid presence record");
 		const id = sessionId(record.sessionId), token = this.token(record.endpoint);
 		if ((expectedId && id !== expectedId) || (expectedToken && token !== expectedToken)) fail("invalid_presence", "invalid presence record");
@@ -240,7 +244,7 @@ export class SessionPresenceRegistry {
 			let value: unknown;
 			try { value = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8")); } catch { fail("invalid_presence", "invalid presence record"); }
 			this.validate(value, id, token);
-			return { record: Object.freeze({ ...(value as PresenceRecord) }), stat };
+			return { record: Object.freeze({ ...value }), stat };
 		} catch (error) { boundary(error); } finally { await handle?.close().catch(() => {}); }
 	}
 }
@@ -256,7 +260,7 @@ export class TransportProtocolError extends Error {
 	readonly code: ProtocolCode;
 	constructor(code: ProtocolCode) { super("invalid transport frame"); this.code = code; this.name = "TransportProtocolError"; }
 }
-const protocol = (code: ProtocolCode): never => { throw new TransportProtocolError(code); };
+function protocol(code: ProtocolCode): never { throw new TransportProtocolError(code); }
 const own = (value: unknown, fields: string[]) => {
 	if (!value || typeof value !== "object" || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) protocol("invalid_frame");
 	const keys = Reflect.ownKeys(value);
@@ -268,14 +272,19 @@ const message = (value: unknown) => {
 	if (typeof value !== "string" || Buffer.byteLength(value) > 8192) protocol("invalid_frame");
 	return value;
 };
+type AckError = NonNullable<AckFrame["error"]>;
+const ackError = (value: unknown): value is AckError => value === "rejected" || value === "duplicate" || value === "busy" || value === "timeout";
 function frame(value: unknown): WireFrame {
 	if (!value || typeof value !== "object") protocol("invalid_frame");
 	const basic = value as Record<string, unknown>;
 	if (basic.kind === "ack") {
 		const fields = basic.accepted === true ? ["version", "kind", "id", "accepted"] : ["version", "kind", "id", "accepted", "error"];
 		const ack = own(value, fields);
-		if (ack.version !== 1 || typeof ack.accepted !== "boolean" || (ack.accepted ? false : !["rejected", "duplicate", "busy", "timeout"].includes(ack.error as string))) protocol("invalid_frame");
-		return Object.freeze({ version: 1, kind: "ack", id: wireId(ack.id), accepted: ack.accepted, ...(ack.accepted ? {} : { error: ack.error as AckFrame["error"] }) });
+		if (ack.version !== 1 || typeof ack.accepted !== "boolean") protocol("invalid_frame");
+		if (ack.accepted) return Object.freeze({ version: 1, kind: "ack", id: wireId(ack.id), accepted: true });
+		const error = ack.error;
+		if (!ackError(error)) protocol("invalid_frame");
+		return Object.freeze({ version: 1, kind: "ack", id: wireId(ack.id), accepted: false, error });
 	}
 	const notification = own(value, ["version", "kind", "id", "senderSessionId", "recipientSessionId", "message"]);
 	if (notification.version !== 1 || notification.kind !== "notification") protocol("invalid_frame");
@@ -304,7 +313,7 @@ export class FrameDecoder {
 		if (this.bytes + chunk.length > MAX_FRAME_BYTES) protocol("oversized");
 		chunk.copy(this.buffer, this.bytes);
 		this.bytes += chunk.length;
-		const newline = this.buffer.indexOf(10, 0, this.bytes);
+		const newline = this.buffer.subarray(0, this.bytes).indexOf(10);
 		if (newline < 0) return;
 		if (newline !== this.bytes - 1) protocol("trailing_frame");
 		let text: string, value: unknown;

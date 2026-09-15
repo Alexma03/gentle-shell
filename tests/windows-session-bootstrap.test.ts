@@ -16,7 +16,7 @@ const runtime = fileURLToPath(new URL("../runtime/windows-session-transport.ps1"
 const fixture = fileURLToPath(new URL("fixtures/windows-session-bootstrap.ps1", import.meta.url));
 const packedRunner = fileURLToPath(new URL("../scripts/test-packed-runner.mjs", import.meta.url));
 
-type CleanupChild = EventEmitter & { pid?: number; stdin: EventEmitter & { end(input?: string): void }; stdout: EventEmitter & { destroy?(): void }; stderr: EventEmitter & { resume?(): void; destroy?(): void }; kill(): boolean };
+type CleanupChild = EventEmitter & { pid?: number; stdin: EventEmitter & { write(input: string): boolean; end(input?: string): void }; stdout: EventEmitter & { destroy?(): void }; stderr: EventEmitter & { resume?(): void; destroy?(): void }; kill(): boolean };
 type ChildLifecycle = Readonly<{ child: CleanupChild; changed: EventEmitter; closeObserved: boolean; exitObserved: boolean; processError?: Error; stdinError?: Error; stdoutError?: Error; stderrError?: Error; stdinClosed: boolean; stdoutClosed: boolean; stderrClosed: boolean; exitCode: number }>;
 
 function observeChildLifecycle(child: CleanupChild): ChildLifecycle {
@@ -1249,7 +1249,9 @@ test("Windows-native bootstrap closes pinned handles after malformed input", { s
 	const input = ['{"requestId":"start-1","operation":"start"}', JSON.stringify({ requestId: "initialize-2", operation: "initialize", agentHome }), "{"].join("\n") + "\n";
 	const result = await runPowerShell(runtime, [], input);
 	assert.equal(result.code, 0);
-	assert.equal(parseHelperControlOutput(result.stdout, true, "Windows helper returned malformed protocol output")[1].result?.state, "initialized");
+	const frame = parseHelperControlOutput(result.stdout, true, "Windows helper returned malformed protocol output")[1];
+	assert.ok(frame.ok && frame.result !== undefined && "state" in frame.result);
+	assert.equal(frame.result.state, "initialized");
 	assert.deepEqual(await fixtureResult("rename", routing, ["-Target", join(root, "routing-released")]), { ok: true, renamed: true });
 });
 

@@ -30,8 +30,23 @@ function isCompilerEntry(value: unknown): value is CompilerEntry {
 	const entry = value as Record<string, unknown>;
 	return Object.keys(entry).sort().join(",") === "code,column,line"
 		&& typeof entry.code === "string" && /^CS[0-9]{4}(?![\s\S])/.test(entry.code)
-		&& Number.isInteger(entry.line) && entry.line >= 0 && entry.line <= maxLocation
-		&& Number.isInteger(entry.column) && entry.column >= 0 && entry.column <= maxLocation;
+		&& typeof entry.line === "number" && Number.isInteger(entry.line) && entry.line >= 0 && entry.line <= maxLocation
+		&& typeof entry.column === "number" && Number.isInteger(entry.column) && entry.column >= 0 && entry.column <= maxLocation;
+}
+function isCompilerEntries(value: unknown): value is CompilerEntry[] {
+	return Array.isArray(value) && value.length > 0 && value.length <= maxErrors && value.every(isCompilerEntry);
+}
+function compilerStage(value: unknown): CompilerControl["stage"] | undefined {
+	switch (value) {
+		case "completed": case "source-parse": case "source-contract": case "compile": case "control-failure": return value;
+		default: return undefined;
+	}
+}
+function compilerOutcome(value: unknown): CompilerOutcome | undefined {
+	switch (value) {
+		case "not-compiled": case "compile-success": case "compile-errors": return value;
+		default: return undefined;
+	}
 }
 
 export function parseCompilerControl(stdout: string): CompilerControl | undefined {
@@ -47,27 +62,31 @@ export function parseCompilerControl(stdout: string): CompilerControl | undefine
 		|| record.kind !== "windows-session-csharp-compile-control"
 		|| typeof record.success !== "boolean"
 		|| typeof record.sourceExtracted !== "boolean"
-		|| !["completed", "source-parse", "source-contract", "compile", "control-failure"].includes(record.stage as string)
-		|| !["not-compiled", "compile-success", "compile-errors"].includes(record.outcome as string)
+		|| compilerStage(record.stage) === undefined
+		|| compilerOutcome(record.outcome) === undefined
 		|| !Array.isArray(record.errorlist) || record.errorlist.length > maxErrors || !record.errorlist.every(isCompilerEntry)) return undefined;
-	if (record.warnings !== undefined && (!Array.isArray(record.warnings) || record.warnings.length === 0 || record.warnings.length > maxErrors || !record.warnings.every(isCompilerEntry))) return undefined;
-	const outcome = record.outcome as CompilerOutcome;
-	const compileSuccess = outcome === "compile-success" && record.sourceExtracted && record.success && record.stage === "completed" && record.errorlist.length === 0;
-	const compileErrors = outcome === "compile-errors" && record.sourceExtracted && !record.success && record.stage === "compile" && record.errorlist.length > 0;
-	const notCompiledStage = (record.stage === "source-parse" && !record.sourceExtracted)
-		|| (record.stage === "source-contract" && !record.sourceExtracted)
-		|| record.stage === "control-failure";
-	const notCompiled = outcome === "not-compiled" && !record.success && record.errorlist.length === 0 && record.warnings === undefined && notCompiledStage;
+	const warnings = record.warnings;
+	const stage = compilerStage(record.stage);
+	const outcome = compilerOutcome(record.outcome);
+	if (stage === undefined || outcome === undefined) return undefined;
+	const compileSuccess = outcome === "compile-success" && record.sourceExtracted && record.success && stage === "completed" && record.errorlist.length === 0;
+	const compileErrors = outcome === "compile-errors" && record.sourceExtracted && !record.success && stage === "compile" && record.errorlist.length > 0;
+	const notCompiledStage = (stage === "source-parse" && !record.sourceExtracted)
+		|| (stage === "source-contract" && !record.sourceExtracted)
+		|| stage === "control-failure";
+	const notCompiled = outcome === "not-compiled" && !record.success && record.errorlist.length === 0 && warnings === undefined && notCompiledStage;
 	if (!compileSuccess && !compileErrors && !notCompiled) return undefined;
-	return Object.freeze({
-		kind: record.kind,
+	const base: Omit<CompilerControl, "warnings"> = {
+		kind: "windows-session-csharp-compile-control",
 		success: record.success,
 		sourceExtracted: record.sourceExtracted,
-		stage: record.stage as CompilerControl["stage"],
+		stage,
 		outcome,
 		errorlist: Object.freeze([...record.errorlist]),
-		...(record.warnings === undefined ? {} : { warnings: Object.freeze([...record.warnings]) }),
-	});
+	};
+	if (warnings === undefined) return Object.freeze(base);
+	if (!isCompilerEntries(warnings)) return undefined;
+	return Object.freeze({ ...base, warnings: Object.freeze([...warnings]) });
 }
 
 function control(value: Record<string, unknown>): string {

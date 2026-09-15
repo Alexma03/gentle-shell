@@ -490,7 +490,9 @@ test("AgentRunner delivers real fd3 authorization rechecks through its permissio
 		grace = undefined;
 	};
 	const releaseOwnedReferences = () => {
-		const unref = (value: { unref?(): void } | null | undefined) => value?.unref?.();
+		const unref = (value: unknown) => {
+			if (value !== null && typeof value === "object" && "unref" in value && typeof value.unref === "function") value.unref();
+		};
 		child?.unref();
 		unref(child?.channel);
 		unref(child?.stdout);
