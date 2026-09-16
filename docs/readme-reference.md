@@ -136,7 +136,7 @@ The stable release is [`v2.6.0`](https://github.com/Gentleman-Programming/gentle
 
 ### Source checkout
 
-This checkout prepares `gentle-pi` `2.7.0`; it is source state, not a published release. Its package-local native runtime pin is Gentle AI `v2.9.1`, distinct from the published `v2.6.0` pairing.
+This checkout prepares `gentle-pi` `3.0.0`; it is source state, not a published release. Its package-local native runtime pin is Gentle AI `v2.9.1`, distinct from the published `v2.6.0` pairing.
 
 The native SDD status consumer accepts both the pinned producer's legacy
 `apply`/`verify`/`remediate`/`archive` instruction record and the classical
