@@ -33,7 +33,7 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { Key, isKeyRelease, matchesKey, truncateToWidth, type KeybindingsManager, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { resolveGentlePiAgentHome } from "../lib/agent-home.ts";
+import { resolveGentlePiAgentHome, gentlePiConfigHome } from "../lib/agent-home.ts";
 import {
 	ensureSddPreflight,
 	getSddPreflightPreferences,
@@ -91,6 +91,17 @@ import {
 	type ProfilesParseDrops,
 } from "../lib/agent-profiles.ts";
 import {
+	clearProfilePinSync,
+	evaluateProfilePin,
+	readProfilePinStatus,
+	REPO_PROFILE_DECLARATION_GITIGNORE_RULES,
+	resolveProfilePin,
+	writeProfilePinSync,
+	type ProfilePinEvaluation,
+	type ProfilePinSource,
+	type ProfilePinStatus,
+} from "../lib/agent-profile-pin.ts";
+import {
 	applyOrchestratorSettings,
 	readOrchestratorSettings,
 	restoreOrchestratorSettings,
@@ -102,7 +113,6 @@ import { createNativeFullscreenInteraction } from "../lib/native-fullscreen-inte
 import {
 	parseSddStatusCommandArgs,
 	renderNativeSddPhasePrompt,
-	resolveSddStatus,
 	type SddPhase,
 } from "../lib/sdd-status.ts";
 import {
@@ -1361,9 +1371,9 @@ Current persona mode: ${persona}
 You are el Gentleman: a Pi-specific coding-agent harness for controlled development work.
 
 Identity contract:
-- When the user asks who or what you are, answer as el Gentleman, not as a generic assistant, and never introduce yourself as only "your assistant" or "the default assistant". Convey this meaning, translated into the user's language: "I am el Gentleman: a Pi-specific coding-agent harness for controlled development, with a senior architect persona. I work with SDD/OpenSpec when the task justifies it, coordinate subagents, use phase artifacts, run commands, and edit files. I am not a generic chatbot."
+- When the user asks who or what you are, answer as el Gentleman, not as a generic assistant, and never introduce yourself as only "your assistant" or "the default assistant". Convey this meaning, translated into the user's language: "I am el Gentleman: a Pi-specific coding-agent harness for controlled development, with a senior architect persona. I run Organic Driven Development by default and SDD/OpenSpec when explicitly selected, coordinate subagents, use phase artifacts, run commands, and edit files. I am not a generic chatbot."
 - Follow the currently selected persona mode.
-- Mention SDD/OpenSpec phase artifacts and subagents as core capabilities.
+- Mention ODD as the default workflow, SDD/OpenSpec phase artifacts, and subagents as core capabilities.
 - Mention memory only when memory packages or callable memory tools are actually active; never invent persistent memory.
 - Do not claim portability outside the Pi runtime.
 
@@ -1371,13 +1381,24 @@ ${personaPrompt}
 
 ${languageBoundary}
 
+Default workflow: Organic Driven Development (MANDATORY)
+Organic Driven Development (ODD) is the predefined workflow of this orchestrator. Every request enters it, without the user asking for a workflow, a plan, or task tracking. SDD is a branch inside ODD, entered only by an explicit request or an accepted proposal. Never describe this workflow only when asked about it: run it. Run these steps in this order on every request:
+1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only: no writer, apply, or implementation artifacts. Ambiguous or conditional change intent gets one clarification; stop and wait.
+2. **Explore.** Explore existing code and requirements first, proportionately to the request, before proposing or writing anything.
+3. **Resolve uncertainty.** Recommend optional research only for a named uncertainty; ask one focused user question only for a real unresolved product decision, then stop and wait; use at most one scoped read-only assumption challenge for a high-consequence unproven premise.
+4. **Classify.** The work is substantial when exploration yields two or more meaningful implementation steps, or progress worth recovering after an interruption. Small, understood work stays small and creates no durable task artifacts.
+5. **Track before the first write.** For substantial authorized implementation, create \`odd/tasks/<feature-name>.md\` and its Engram mirror \`odd/<feature-name>/tasks\` automatically, before the first source write, without asking permission for tasks or storage. Tell the user in one line which feature document was created and how many tasks it holds.
+6. **Implement task by task.** Route each task through the orchestrator's Work Routing Ladder, with the configured TDD mode and applicable checks. Check an item off only after its outcome and checks were observed; update the file and the mirror after each task.
+7. **Close.** Report the verified outcome, every failed, skipped, or pending check, and the next step. Native review applies only at the deliverable boundary and only under the user-owned RDD switch.
+Resume an interrupted feature with \`mem_context\`, then project- and feature-scoped \`mem_search\`, then \`mem_get_observation\` for the full document, then the task file itself; reconcile before continuing the next unfinished task. Detail for steps 3–7: \`orchestrator-delegation.md\` and \`orchestrator-memory.md\`.
+
 Harness principles:
 - el Gentleman is not prompt engineering. It is runtime discipline around powerful agents.
-- Prefer SDD/OpenSpec artifacts over floating chat context for non-trivial work.
+- Organic Driven Development (ODD) is the predefined workflow for every request: authorize, explore, resolve uncertainty, classify, track substantial work before the first write, implement task by task with proportionate checks, close. SDD is explicitly selected.
 - Clarify scope, constraints, acceptance criteria, and non-goals before implementation.
 - Use subagents when available for exploration, planning, implementation, and review, while keeping one parent session responsible for orchestration.
 - Keep writes single-threaded unless the user explicitly approves parallel write isolation.
-- If tests exist, use strict TDD evidence: RED, GREEN, TRIANGULATE, REFACTOR.
+- Use configured TDD mode, source, and exact runner; test presence does not enable it. Follow orchestrator-delegation.md for ODD forwarding and evidence.
 - Protect the human reviewer: avoid oversized changes, surface review workload risk, and ask before turning one task into a large multi-area change.
 - Never claim persistent memory is available because of this package. Memory is provided by separate packages or MCP tools when installed and callable.
 
@@ -1752,7 +1773,7 @@ function isNamedAgentStartEvent(event: unknown): boolean {
 }
 
 function sddPhaseFromAgentStartEvent(event: unknown): SddPhase | "remediate" | undefined {
-	const phases = ["apply", "verify", "sync", "archive", "remediate"] as const;
+	const phases = ["apply", "verify", "archive", "remediate"] as const;
 	const names = readAgentStartNames(event);
 	const systemPrompt = readStringPath(event, ["systemPrompt"]) ?? "";
 	const promptPhases = phases.filter((phase) => new RegExp(`\\bSDD ${phase} executor\\b`, "i").test(systemPrompt));
@@ -1762,7 +1783,7 @@ function sddPhaseFromAgentStartEvent(event: unknown): SddPhase | "remediate" | u
 		(promptPhases.length === 0 || promptPhases[0] === phase));
 }
 
-function resolveSddChangeSelection(serialized: unknown, cwd: string, agentName: string) {
+function resolveSddChangeSelection(serialized: unknown, cwd: string, agentName: string): { changeName: string; workspaceRoot: string; phase: SddPhase | "remediate"; failedEvidenceRevision?: string } {
 	if (typeof serialized !== "string") throw new Error("SDD selection must be a JSON string.");
 	let value: unknown;
 	try {
@@ -1776,7 +1797,7 @@ function resolveSddChangeSelection(serialized: unknown, cwd: string, agentName: 
 	const { changeName, workspaceRoot, phase } = value;
 	if (typeof changeName !== "string" || changeName.length === 0 ||
 		typeof workspaceRoot !== "string" || workspaceRoot.length === 0 ||
-		(phase !== "apply" && phase !== "verify" && phase !== "sync" && phase !== "archive" && phase !== "remediate")) {
+		(phase !== "apply" && phase !== "verify" && phase !== "archive" && phase !== "remediate")) {
 		throw new Error("SDD selection has an invalid identity.");
 	}
 	if (agentName !== `sdd-${phase}`) throw new Error("SDD selection phase does not match the child agent.");
@@ -1795,18 +1816,23 @@ function resolveSddChangeSelection(serialized: unknown, cwd: string, agentName: 
 	return { changeName, workspaceRoot: canonicalCwd, phase, ...(phase === "remediate" ? { failedEvidenceRevision: value.failedEvidenceRevision as string } : {}) };
 }
 
-function resolveSddChangeStartup(
-	serialized: unknown,
-	cwd: string,
-	agentName: string,
-	resolver: (options: Parameters<typeof resolveSddStatus>[0]) => ReturnType<typeof resolveSddStatus> = resolveSddStatus,
-) {
-	const selection = resolveSddChangeSelection(serialized, cwd, agentName);
-	const status = resolver({ cwd: selection.workspaceRoot, workspaceRoot: selection.workspaceRoot, changeName: selection.changeName, includeInstructions: true });
-	if (status.actionContext.workspaceRoot !== selection.workspaceRoot || status.changeName !== selection.changeName) {
-		throw new Error("SDD selection resolver returned a mismatched status.");
+function assertNativeSddPhaseReady(status: NativeSddStatusV2, phase: SddPhase | "remediate"): void {
+	if (!status.phaseInstructions || !(phase in status.phaseInstructions)) {
+		throw new Error(`Native SDD status cannot represent phase ${phase}.`);
 	}
-	return { selection, status };
+	if (phase === "remediate") {
+		if (status.nextRecommended !== phase) throw new Error("Native SDD status does not select remediation.");
+		return;
+	}
+	// Optional verification may be explicitly selected when native recommends
+	// apply or archive. Preserve that recommendation; never advance an older provider.
+	const optionalVerify = phase === "verify" && (status.nextRecommended === "archive" || status.nextRecommended === "apply") && status.blockedReasons.length === 0;
+	if ((!optionalVerify && status.nextRecommended !== phase) || status.dependencies[phase] !== "ready" ||
+		(status.blockedReasons.length > 0 && phase !== "verify")) {
+		// A native-selected verify can refresh the evidence named by a blocker.
+		// Apply/archive never inherit that exception (gentle-pi#972).
+		throw new Error(`SDD selection native status blocks phase ${phase}; it cannot execute.`);
+	}
 }
 
 async function resolveSelectedNativeSddChangeStartup(
@@ -1814,16 +1840,8 @@ async function resolveSelectedNativeSddChangeStartup(
 	cwd: string,
 	agentName: string,
 	native: Pick<NativeReviewCli, "sddStatus"> | null | undefined,
-	localResolver: (options: Parameters<typeof resolveSddStatus>[0]) => ReturnType<typeof resolveSddStatus> = resolveSddStatus,
-): Promise<{ selection: { changeName: string; workspaceRoot: string; phase: SddPhase | "remediate"; failedEvidenceRevision?: string }; status: NativeSddStatusV2 | ReturnType<typeof resolveSddStatus> }> {
+): Promise<{ selection: { changeName: string; workspaceRoot: string; phase: SddPhase | "remediate"; failedEvidenceRevision?: string }; status: NativeSddStatusV2 }> {
 	const selection = resolveSddChangeSelection(serialized, cwd, agentName);
-	if (selection.phase === "sync") {
-		const status = localResolver({ cwd: selection.workspaceRoot, workspaceRoot: selection.workspaceRoot, changeName: selection.changeName, includeInstructions: true });
-		if (status.actionContext.workspaceRoot !== selection.workspaceRoot || status.changeName !== selection.changeName) {
-			throw new Error("SDD selection resolver returned a mismatched status.");
-		}
-		return { selection, status };
-	}
 	if (native?.sddStatus === undefined) throw new Error("SDD selection native status is unavailable.");
 	let status: NativeSddStatusV2;
 	try {
@@ -1834,21 +1852,9 @@ async function resolveSelectedNativeSddChangeStartup(
 	} catch (error) {
 		throw new Error(`SDD selection native status is blocked: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	if ((selection.phase !== "remediate" && !(selection.phase in status.dependencies)) || status.phaseInstructions === undefined || !(selection.phase in status.phaseInstructions)) {
-		throw new Error(`SDD selection native status cannot represent phase ${selection.phase}.`);
-	}
-	if (selection.phase === "remediate") {
-		if (status.nextRecommended !== "remediate" || status.remediationState?.failedEvidenceRevision !== selection.failedEvidenceRevision) throw new Error("Stale remediation selection");
-	} else if (status.nextRecommended !== selection.phase || status.dependencies[selection.phase] !== "ready" || (status.blockedReasons.length > 0 && selection.phase !== "verify")) {
-		// Native's contract gates terminal, archive, and apply work on a
-		// non-empty `blockedReasons`, and it deliberately keeps the `verify`
-		// route runnable, because the blocker can name the evidence refresh
-		// that is its own remedy ("failed verification evidence is incomplete;
-		// rerun SDD verification", gentle-ai#3538). Vetoing that route made the
-		// native-recommended phase unreachable (gentle-pi#972). The other
-		// phases still fail closed, and every blocker stays in the injected
-		// status for reporting.
-		throw new Error(`SDD selection native status blocks phase ${selection.phase}; it cannot execute.`);
+	assertNativeSddPhaseReady(status, selection.phase);
+	if (selection.phase === "remediate" && status.remediationState?.failedEvidenceRevision !== selection.failedEvidenceRevision) {
+		throw new Error("Stale remediation selection");
 	}
 	return { selection, status };
 }
@@ -2048,7 +2054,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function gentleAiConfigHome(): string {
-	return process.env.GENTLE_PI_CONFIG_HOME ?? join(homedir(), ".pi", "gentle-ai");
+	return gentlePiConfigHome();
 }
 
 function modelConfigPath(_cwd: string): string {
@@ -2237,6 +2243,18 @@ function routingEntryFromModelProfile(value: unknown): AgentRoutingEntry | undef
 	return entry && !isClearRoutingEntry(entry) ? entry : undefined;
 }
 
+function mergeMaterializedRouting(
+	profile: AgentRoutingEntry | undefined,
+	frontmatter: AgentRoutingEntry | undefined,
+): AgentRoutingEntry | undefined {
+	if (!profile) return frontmatter;
+	if (!frontmatter) return profile;
+	return normalizeRoutingEntry({
+		model: profile.model ?? frontmatter.model,
+		thinking: profile.thinking ?? frontmatter.thinking,
+	});
+}
+
 function readSubagentModelProfiles(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
 	try {
@@ -2260,7 +2278,8 @@ async function readSubagentModelProfilesAsync(path: string): Promise<Record<stri
 /**
  * The routing an agent is materialized with — what subagent launches actually
  * resolve — regardless of what `models.json` records: the runtime reads
- * `subagents.json` model profiles first and the agent frontmatter otherwise.
+ * `subagents.json` model profiles first and the agent frontmatter otherwise,
+ * independently for each routing field.
  */
 function readMaterializedRoutingEntry(
 	cwd: string,
@@ -2274,12 +2293,11 @@ function readMaterializedRoutingEntry(
 		profilesByPath.set(profilesPath, profiles);
 	}
 	const fromProfile = routingEntryFromModelProfile(profiles[agent.name]);
-	if (fromProfile) return fromProfile;
-	if (!agent.filePath || !existsSync(agent.filePath)) return undefined;
+	if (!agent.filePath || !existsSync(agent.filePath)) return fromProfile;
 	try {
-		return readFrontmatterRouting(readFileSync(agent.filePath, "utf8"));
+		return mergeMaterializedRouting(fromProfile, readFrontmatterRouting(readFileSync(agent.filePath, "utf8")));
 	} catch {
-		return undefined;
+		return fromProfile;
 	}
 }
 
@@ -2295,22 +2313,34 @@ async function readMaterializedRoutingEntryAsync(
 		profilesByPath.set(profilesPath, profiles);
 	}
 	const fromProfile = routingEntryFromModelProfile(profiles[agent.name]);
-	if (fromProfile) return fromProfile;
-	if (!agent.filePath || !(await pathExists(agent.filePath))) return undefined;
+	if (!agent.filePath || !(await pathExists(agent.filePath))) return fromProfile;
 	try {
-		return readFrontmatterRouting(await readFile(agent.filePath, "utf8"));
+		return mergeMaterializedRouting(fromProfile, readFrontmatterRouting(await readFile(agent.filePath, "utf8")));
 	} catch {
-		return undefined;
+		return fromProfile;
 	}
+}
+
+/**
+ * The routing a launch would resolve: a winning per-repository pin replaces subagent
+ * routing wholesale, so when one wins it is the effective routing. The launch
+ * resolver decides, so the profile shown as effective is exactly the profile a launch
+ * would use -- there is no second precedence rule here.
+ */
+function pinnedEffectiveModelConfig(cwd: string): AgentModelConfig | undefined {
+	const resolution = resolveProfilePin({ cwd, configHome: gentleAiConfigHome() });
+	return resolution === undefined ? undefined : cloneModelConfig(resolution.modelProfiles);
 }
 
 /**
  * The routing in effect: `models.json` where it speaks, and the materialized
  * stores the runtime resolves from for every discoverable agent it is silent
  * about. A sparse `models.json` therefore never hides routing that is still
- * live (#1012). Reading never writes.
+ * live (#1012). A winning pin outranks both. Reading never writes.
  */
 function readEffectiveModelConfig(cwd: string): AgentModelConfig {
+	const pinned = pinnedEffectiveModelConfig(cwd);
+	if (pinned) return pinned;
 	const effective = cloneModelConfig(readModelConfig(cwd));
 	const profilesByPath = new Map<string, Record<string, unknown>>();
 	for (const agent of listDiscoverableAgents(cwd)) {
@@ -2322,6 +2352,8 @@ function readEffectiveModelConfig(cwd: string): AgentModelConfig {
 }
 
 async function readEffectiveModelConfigAsync(cwd: string): Promise<AgentModelConfig> {
+	const pinned = pinnedEffectiveModelConfig(cwd);
+	if (pinned) return pinned;
 	const effective = cloneModelConfig(await readModelConfigAsync(cwd));
 	const profilesByPath = new Map<string, Record<string, unknown>>();
 	for (const agent of await listDiscoverableAgentsAsync(cwd)) {
@@ -3427,6 +3459,11 @@ async function showSddModelPanel(
 
 async function handleModelsCommand(ctx: ExtensionContext): Promise<void> {
 	migrateLegacyProjectModelOverrides(ctx.cwd);
+	// A pinned repository resolves its subagent routing from the profile at launch,
+	// so global routing written here will not reach its subagents. Saying it before
+	// the edits, not after them, is the difference between a note and a surprise.
+	const pinNote = profilePinScopeNote(ctx.cwd);
+	if (pinNote) ctx.ui.notify(pinNote, "info");
 	const savedConfig = await readModelRoutingAuthorityAsync(
 		modelConfigPath(ctx.cwd),
 		legacyProjectModelConfigPath(ctx.cwd),
@@ -3551,6 +3588,7 @@ type ProfilesPanelResult =
 	| { type: "rename"; name: string }
 	| { type: "delete"; name: string }
 	| { type: "export"; name: string }
+	| { type: "pin"; source: ProfilePinSource; name: string }
 	| { type: "import" }
 	| { type: "close" };
 
@@ -3566,6 +3604,130 @@ function hasOwnProfile(profiles: Record<string, unknown>, name: string): boolean
 
 function profilesErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The pin layer that wins, in one line: the winning layer's scope, name, and exact
+ * file path, or the first stale layer named as missing from the loaded store. An
+ * invalid layer is reported by `profilePinDetailLines` instead, because a file that
+ * is not a pin is not a layer that could ever win.
+ */
+function profilePinStateLabel(
+	status: ProfilePinStatus | undefined,
+	evaluation: ProfilePinEvaluation,
+): string {
+	if (!status) return "none (not inside a Git worktree)";
+	if (evaluation.winner) {
+		return `${evaluation.winner.source}: ${evaluation.winner.profile} — ${evaluation.winner.path}`;
+	}
+	const stale = evaluation.stale[0];
+	if (stale) return `${stale.source}: ${stale.profile} (missing from this store) — ${stale.path}`;
+	return "none";
+}
+
+/**
+ * Every line the panel needs to tell a pinned repository the truth: the winning
+ * layer and its exact file, an explicit warning for a file that is not a pin named
+ * by path (kept separate from a pin naming a profile this store no longer defines),
+ * and one sentence that a winning pin outranks the global active profile and every
+ * `/gentle:models` write.
+ */
+function profilePinDetailLines(
+	status: ProfilePinStatus | undefined,
+	profiles: Record<string, unknown>,
+): string[] {
+	const evaluation = evaluateProfilePin(status, profiles);
+	const lines = [`pin           ${profilePinStateLabel(status, evaluation)}`];
+	const shownStale = evaluation.winner ? undefined : evaluation.stale[0];
+	for (const issue of evaluation.invalid) {
+		lines.push(`              invalid pin file ${issue.path} (${issue.source} layer); ignoring it — fix or remove the file.`);
+	}
+	for (const issue of evaluation.stale) {
+		if (issue === shownStale) continue;
+		lines.push(`              the ${issue.source} pin names "${issue.profile}", which this store does not define; ignoring it (${issue.path}).`);
+	}
+	if (evaluation.winner) {
+		lines.push("              This repository's subagent routing comes from the pin; the globally active profile and /gentle:models writes do not apply here.");
+	}
+	return lines;
+}
+
+/**
+ * Keep the clone-scoped pin pointing at the profile it names after a rename. The
+ * repository declaration is a tracked file, so rewriting it would churn a commit
+ * behind the operator's back; a declaration that still names the old profile is
+ * reported instead, and `P` republishes it. Layers that name something else, or no
+ * layer at all, are left alone.
+ */
+function followRenamedPin(
+	cwd: string,
+	from: string,
+	to: string,
+): { followed: string[]; stillDeclared: string[] } {
+	const status = readProfilePinStatus(cwd);
+	if (!status) return { followed: [], stillDeclared: [] };
+	const followed: string[] = [];
+	const stillDeclared: string[] = [];
+	if (status.local.status === "valid" && status.local.profile === from) {
+		try {
+			writeProfilePinSync(status.localPath, to);
+			followed.push(status.localPath);
+		} catch {
+			// A pin that cannot be rewritten is reported by the pin line and degrades to
+			// the global routing, exactly like any other stale pin; a rename that already
+			// succeeded in the store is not undone by it.
+		}
+	}
+	if (status.repo.status === "valid" && status.repo.profile === from) {
+		stillDeclared.push(status.repoPath);
+	}
+	return { followed, stillDeclared };
+}
+
+/**
+ * One sentence naming the profile this repository resolves, for the commands whose
+ * writes a pin outranks: `/gentle:models` materializes global routing that a pinned
+ * repository will not use for its subagents. The launch resolver decides, so the note
+ * names exactly what a launch would use.
+ */
+function profilePinScopeNote(cwd: string): string | undefined {
+	const resolution = resolveProfilePin({ cwd, configHome: gentleAiConfigHome() });
+	if (!resolution) return undefined;
+	return sanitizeTerminalText(
+		`This repository pins profile "${resolution.profile}" (${resolution.source} pin at ${resolution.path}), so its subagent launches resolve that profile instead of the global routing. Change or remove the pin with /gentle:profiles (p or P).`,
+	);
+}
+
+/**
+ * Whether the committed declaration would actually be committed. This shells out to
+ * Git, so it runs only on the key press that writes the declaration and makes at most
+ * two bounded calls. Any Git failure is reported as unknown instead of thrown: a pin
+ * write that already succeeded must not become an error because a probe about sharing
+ * it failed.
+ */
+function repoDeclarationSharing(root: string, path: string): string {
+	const relativePath = relative(root, path).split(sep).join("/");
+	const run = (...arguments_: string[]): string =>
+		execFileSync("git", arguments_, { cwd: root, encoding: "utf8" }).trim();
+	try {
+		// Exit 0 means gitignore matches the path; the exact negation line is what makes
+		// the declaration committable again.
+		run("check-ignore", "--quiet", relativePath);
+		return [
+			`This worktree ignores ${relativePath}; add these exact lines to the root .gitignore to share only this declaration:`,
+			...REPO_PROFILE_DECLARATION_GITIGNORE_RULES,
+		].join("\n");
+	} catch (error) {
+		// Exit 1 means "not ignored"; anything else (including a missing git) is unknown.
+		const exitStatus = (error as { status?: number }).status;
+		if (exitStatus !== 1) return `Git could not say whether ${relativePath} is tracked; check it before committing.`;
+	}
+	try {
+		run("ls-files", "--error-unmatch", relativePath);
+		return `${relativePath} is tracked by Git; commit the change to share it.`;
+	} catch {
+		return `${relativePath} is not ignored, so it is committable as-is.`;
+	}
 }
 
 /** Keep a detail-pane scroll offset inside the bounds of its own content. */
@@ -3595,6 +3757,8 @@ class ProfilesPanel implements OverlayComponent {
 	private readonly theme: Theme | undefined;
 	private readonly rows: () => number;
 	private readonly orchestratorSettings: OrchestratorSettingsReadResult;
+	// Actions reopen the panel, refreshing this snapshot without disk reads during rendering.
+	private readonly pinStatus: ProfilePinStatus | undefined;
 
 	constructor(
 		file: AgentProfilesFile,
@@ -3607,6 +3771,7 @@ class ProfilesPanel implements OverlayComponent {
 		orchestratorSettings: OrchestratorSettingsReadResult,
 		saveSnapshot: ProfilesSnapshotHandler,
 		requestRender: () => void,
+		pinStatus: () => ProfilePinStatus | undefined,
 	) {
 		this.file = file;
 		this.currentConfig = currentConfig;
@@ -3616,7 +3781,8 @@ class ProfilesPanel implements OverlayComponent {
 		this.theme = theme;
 		this.rows = rows;
 		this.orchestratorSettings = orchestratorSettings;
-		const items = buildProfileListItems(file);
+		this.pinStatus = pinStatus();
+		const items = buildProfileListItems(file, evaluateProfilePin(this.pinStatus, file.profiles).winner?.profile);
 		this.listItems = items;
 		this.list = new NativeChoiceList<ProfileListItem>(
 			items,
@@ -3683,6 +3849,8 @@ class ProfilesPanel implements OverlayComponent {
 		if (data === "r") return this.finish({ type: "rename", name });
 		if (data === "x") return this.finish({ type: "delete", name });
 		if (data === "e") return this.finish({ type: "export", name });
+		if (data === "p") return this.finish({ type: "pin", source: "local", name });
+		if (data === "P") return this.finish({ type: "pin", source: "repo", name });
 		this.list.handleInput(data);
 	}
 
@@ -3755,7 +3923,7 @@ class ProfilesPanel implements OverlayComponent {
 	private refreshListItems(): void {
 		// Keep the list instance (and its pointer observer) alive while refreshing the
 		// mutable item records that NativeChoiceList already holds by reference.
-		for (const item of buildProfileListItems(this.file)) {
+		for (const item of buildProfileListItems(this.file, evaluateProfilePin(this.pinStatus, this.file.profiles).winner?.profile)) {
 			const current = this.listItems.find((candidate) => candidate.id === item.id);
 			if (current) Object.assign(current, item);
 		}
@@ -3802,7 +3970,7 @@ class ProfilesPanel implements OverlayComponent {
 
 	private renderFooterRow(width: number): string {
 		const hints =
-			"enter apply · c create · s snapshot · d duplicate · r rename · x delete · e export · i import · j/k line · ctrl+j/k page · esc close";
+			"enter apply · c create · s snapshot · d duplicate · r rename · x delete · e export · i import · p pin · P share · j/k line · ctrl+j/k page · esc close";
 		const text = this.feedback ?? hints;
 		return [
 			this.renderText("│", "border"),
@@ -3833,6 +4001,11 @@ class ProfilesPanel implements OverlayComponent {
 				"text",
 			),
 			this.renderLine(`now           ${this.effectiveOrchestratorLabel()}`, width, "muted"),
+			// A pin only redirects subagent routing, so it is reported next to the
+			// orchestrator lines it deliberately does not move. The winning layer's path,
+			// any invalid or stale layer, and the scope sentence all come from the shared
+			// precedence rule the launch resolver uses.
+			...profilePinDetailLines(this.pinStatus, this.file.profiles).map((line) => this.renderLine(line, width, "muted")),
 			"",
 			this.renderLine("Profile routing", width, "accent"),
 			...this.indentLines(this.routingLines(profileRows, widths), width),
@@ -3896,8 +4069,8 @@ async function showProfilesPanel(
 	selectedName: string | undefined,
 	saveSnapshot: ProfilesSnapshotHandler,
 ): Promise<ProfilesPanelResult> {
-	// Read once, for the panel lifetime. The orchestrator shown as "now" is the
-	// state the panel opened on, not a value that changes mid-panel.
+	// Both orchestrator and pin state are snapshots for this panel visit.
+	// Actions (including p/P) reopen the panel and read fresh state.
 	const orchestratorSettings = readOrchestratorSettings(orchestratorSettingsPath());
 	return ctx.ui.custom<ProfilesPanelResult>(
 		(tui, theme, keybindings, done) => {
@@ -3912,6 +4085,7 @@ async function showProfilesPanel(
 				orchestratorSettings,
 				saveSnapshot,
 				() => tui.requestRender(),
+				() => readProfilePinStatus(ctx.cwd),
 			);
 			const container = createNativeFullscreenInteraction({
 				keyboardTarget: panel,
@@ -3977,6 +4151,31 @@ async function runProfilesPanelAction(
 	switch (result.type) {
 		case "apply": {
 			if (!hasOwnProfile(file.profiles, result.name)) return file;
+			// A pinned repository resolves its subagent routing from the profile at launch,
+			// so a global apply would move global state this repository never reads. When a
+			// pin wins, applying is repo-scoped: re-pin this clone and write no global
+			// routing, no materialized stores, and no orchestrator. The committed
+			// declaration is never rewritten behind a commit.
+			const pinResolution = resolveProfilePin({ cwd: ctx.cwd, configHome: gentleAiConfigHome() });
+			if (pinResolution) {
+				const localPath = pinResolution.status.localPath;
+				let pinNote: string;
+				try {
+					writeProfilePinSync(localPath, result.name);
+					pinNote = `el Gentleman applied profile "${result.name}" repo-scoped: this clone now pins it in ${sanitizeTerminalText(localPath)}.\nSubagent launches here keep resolving the pin; no global routing or orchestrator was written.`;
+				} catch (error) {
+					ctx.ui.notify(
+						`el Gentleman could not pin profile "${result.name}" in ${sanitizeTerminalText(localPath)}: ${profilesErrorMessage(error)}`,
+						"warning",
+					);
+					return file;
+				}
+				if (pinResolution.source === "repo" && pinResolution.path !== localPath) {
+					pinNote += `\nThis worktree's committed declaration ${sanitizeTerminalText(pinResolution.path)} still declares "${pinResolution.profile}"; the clone-local pin now takes precedence.`;
+				}
+				ctx.ui.notify(pinNote, "info");
+				return file;
+			}
 			const normalized = normalizeModelConfig(file.profiles[result.name]) ?? {};
 			const orchestratorEntry = readProfileOrchestrator(normalized);
 			// Applying spans three files — the store, models.json, and Pi's global
@@ -4087,11 +4286,19 @@ async function runProfilesPanelAction(
 					orchestratorNote = `\nOrchestrator set to ${formatOrchestratorSelection(orchestratorEntry)} in ${sanitizeTerminalText(settingsPath)}.`;
 				}
 			}
+			// A pin that does not resolve changes nothing at launch, so the global apply
+			// above is what governs this repository. Saying so keeps a broken pin from
+			// looking like the reason a launch ignored the profile just applied.
+			const pinEvaluation = evaluateProfilePin(readProfilePinStatus(ctx.cwd), file.profiles);
+			let pinNote = "";
+			if (pinEvaluation.stale.length > 0 || pinEvaluation.invalid.length > 0) {
+				pinNote = "\nThis repository also has a pin layer that does not resolve; the global routing above governs its subagents until the pin is fixed.";
+			}
 			ctx.ui.notify(
 				[
 					`el Gentleman applied profile "${result.name}" — ${applyResult.updated} agent${applyResult.updated === 1 ? "" : "s"} updated.`,
 					"New routing takes effect on the next subagent launch.",
-				].join("\n") + orchestratorNote,
+				].join("\n") + orchestratorNote + pinNote,
 				"info",
 			);
 			return claimed;
@@ -4148,6 +4355,16 @@ async function runProfilesPanelAction(
 			try {
 				const next = renameProfile(file, result.name, name.trim());
 				writeProfilesFileSync(path, next);
+				// A pin stores a name, so a rename that did not follow it would leave every
+				// pinned repository with a name the store no longer defines, which silently
+				// returns those repositories to the global routing.
+				const follow = followRenamedPin(ctx.cwd, result.name, name.trim());
+				ctx.ui.notify(
+					`el Gentleman renamed profile "${result.name}" to "${name.trim()}".` +
+						(follow.followed.length > 0 ? `\nUpdated the clone pin: ${follow.followed.map((entry) => sanitizeTerminalText(entry)).join(", ")}.` : "") +
+						(follow.stillDeclared.length > 0 ? `\nThe committed repository declaration ${follow.stillDeclared.map((entry) => sanitizeTerminalText(entry)).join(", ")} still names "${result.name}"; press P on "${name.trim()}" to republish it.` : ""),
+					"info",
+				);
 				return next;
 			} catch (error) {
 				ctx.ui.notify(`Profile not renamed: ${profilesErrorMessage(error)}`, "warning");
@@ -4155,6 +4372,30 @@ async function runProfilesPanelAction(
 			}
 		}
 		case "delete": {
+			// A pinned profile is live state for this repository, so deleting it is
+			// refused the same way deleting the active profile is: the pin must be cleared
+			// deliberately instead of leaving a name that resolves to nothing. Either
+			// layer refuses, not just the winning one, because a non-winning layer still
+			// names a live profile for this repository.
+			const deletePinStatus = readProfilePinStatus(ctx.cwd);
+			const namedLayers: string[] = [];
+			if (deletePinStatus) {
+				for (const layer of [
+					{ scope: "local", read: deletePinStatus.local, path: deletePinStatus.localPath },
+					{ scope: "repo", read: deletePinStatus.repo, path: deletePinStatus.repoPath },
+				]) {
+					if (layer.read.status === "valid" && layer.read.profile === result.name) {
+						namedLayers.push(`${layer.scope} pin at ${sanitizeTerminalText(layer.path)}`);
+					}
+				}
+			}
+			if (namedLayers.length > 0) {
+				ctx.ui.notify(
+					`Profile "${result.name}" is pinned for this repository (${namedLayers.join(" and ")}). Remove the pin first with /gentle:profiles (p removes the clone pin, P removes the declaration), then delete it.`,
+					"warning",
+				);
+				return file;
+			}
 			const approved = await ctx.ui.confirm(
 				"Delete profile?",
 				`Delete profile "${result.name}" from ${path}? The routing in ${modelConfigPath(ctx.cwd)} is not changed.`,
@@ -4168,6 +4409,65 @@ async function runProfilesPanelAction(
 				ctx.ui.notify(`Profile not deleted: ${profilesErrorMessage(error)}`, "warning");
 				return file;
 			}
+		}
+		case "pin": {
+			if (!hasOwnProfile(file.profiles, result.name)) return file;
+			// The pin layer is chosen by the key, not by the file that happens to exist:
+			// `p` sets the local pin in the clone's Git common directory, `P` sets the
+			// committable per-worktree declaration. Both toggle: the same key on the
+			// profile a layer already names removes that layer, so a repository can be
+			// released without editing files by hand. Neither writes routing, so a
+			// failure here has nothing to roll back.
+			const status = readProfilePinStatus(ctx.cwd);
+			if (!status) {
+				ctx.ui.notify(
+					"el Gentleman cannot pin a profile because this session is not inside a Git worktree. Pinning is per repository; apply the profile globally instead.",
+					"warning",
+				);
+				return file;
+			}
+			const pinPath = result.source === "local" ? status.localPath : status.repoPath;
+			const current = result.source === "local" ? status.local : status.repo;
+			const currentlyPinned = current.status === "valid" && current.profile === result.name;
+			const scope = result.source === "local" ? "clone" : "worktree";
+			try {
+				if (currentlyPinned) clearProfilePinSync(pinPath);
+				else writeProfilePinSync(pinPath, result.name);
+			} catch (error) {
+				ctx.ui.notify(
+					`el Gentleman could not update profile pin ${sanitizeTerminalText(pinPath)}: ${profilesErrorMessage(error)}`,
+					"warning",
+				);
+				return file;
+			}
+			if (currentlyPinned) {
+				ctx.ui.notify(
+					[
+						`el Gentleman removed the ${result.source} pin for this ${scope} from ${sanitizeTerminalText(pinPath)}.`,
+						result.source === "local"
+							? "This clone falls back to the repository declaration, then to the global routing."
+							: "This worktree falls back to the global routing; a local pin in the clone still outranks it.",
+					].join("\n"),
+					"info",
+				);
+				return file;
+			}
+			// The sharing line is only worth a Git call when the declaration was just
+			// written, and it must never turn a successful pin into a failure.
+			const sharingNote = result.source === "repo" ? `\n${repoDeclarationSharing(status.root, pinPath)}` : "";
+			ctx.ui.notify(
+				result.source === "local"
+					? [
+						`el Gentleman pinned profile "${result.name}" for this clone in ${sanitizeTerminalText(pinPath)}.`,
+						"Subagent launches in this repository resolve that profile at launch; the orchestrator and every other repository keep their global routing. Press p again to unpin.",
+					].join("\n")
+					: [
+						`el Gentleman declared profile "${result.name}" for this worktree in ${sanitizeTerminalText(pinPath)}.`,
+						"Subagent launches resolve it at launch. Commit the file to share the routing; a local pin takes precedence over it. Press P again to remove the declaration.",
+					].join("\n") + sharingNote,
+				"info",
+			);
+			return file;
 		}
 		case "export": {
 			if (!hasOwnProfile(file.profiles, result.name)) return file;
@@ -8162,6 +8462,8 @@ export const __testing = {
 	resolveReviewModeGate,
 	readEffectiveModelConfig,
 	readEffectiveModelConfigAsync,
+	followRenamedPin,
+	profilePinScopeNote,
 	listAgentsFromDir,
 	listAgentsFromDirAsync,
 	listDiscoverableAgents,
@@ -8202,32 +8504,11 @@ export const __testing = {
 	readNativeReviewOutcome,
 	recordNativeReviewOutcome,
 	clearNativeReviewOutcomeMemoForTesting,
-	resolveControllerSddStatus,
-	resolveStartupControllerSddStatus,
-	resolveSddChangeStartup,
 	resolveSelectedNativeSddChangeStartup,
 	readSddChangeFlag,
 	resetTelemetryTriggerGuardForTesting,
 	createGentleAiExtension: createGentleAiExtensionForTesting,
 };
-
-function resolveControllerSddStatus(
-	cwd: string,
-	changeName: string | undefined,
-	includeInstructions: boolean,
-	artifactStore: SddPreflightPreferences["artifactStore"] | undefined,
-) {
-	return resolveSddStatus({ cwd, changeName, includeInstructions, artifactStore });
-}
-
-function resolveStartupControllerSddStatus(
-	cwd: string,
-	changeName: string | undefined,
-	includeInstructions: boolean,
-	artifactStore: SddPreflightPreferences["artifactStore"] | undefined,
-) {
-	return resolveControllerSddStatus(cwd, changeName, includeInstructions, artifactStore);
-}
 
 export interface GentleAiRuntimeDependencies {
 	nativeReviewCli?: NativeReviewCli | null;
@@ -8663,6 +8944,11 @@ function createGentleAiExtensionForTesting(
 		if (typeof event.text !== "string" || !isSddPreflightTrigger(event.text)) {
 			return { action: "continue" };
 		}
+		// An RPC child consumes the parent-rendered preflight block transported in
+		// its task context; it never originates preflight. Re-entering the
+		// parent-only resolver here would reject, and consuming the rejection
+		// would swallow the delegated prompt before the agent ever starts.
+		if (ctx.mode === "rpc") return { action: "continue" };
 		try { await runSddPreflight(ctx); }
 		catch (error) {
 			if (ctx.hasUI) ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
@@ -8674,7 +8960,8 @@ function createGentleAiExtensionForTesting(
 	let nativeSddStartupBlock: string | undefined;
 	pi.on("before_agent_start", async (event, ctx) => {
 		nativeSddStartupBlock = undefined;
-		const isSddAgent = isSddAgentStartEvent(event);
+		const retiredSync = readAgentStartNames(event).includes("sdd-sync") || /\bSDD sync executor\b/i.test(event.systemPrompt ?? "");
+		const isSddAgent = retiredSync || isSddAgentStartEvent(event);
 		const isNamedAgent = isNamedAgentStartEvent(event);
 		const subagentDepthKey = pendingReviewConsentSessionKey(ctx, pendingReviewConsentFallbackKey);
 		if (isSddAgent || isNamedAgent) {
@@ -8721,14 +9008,15 @@ function createGentleAiExtensionForTesting(
 				: "";
 		const phase = isSddAgent ? sddPhaseFromAgentStartEvent(event) : undefined;
 		const launchSddChange = readSddChangeFlag(pi);
-		if (launchSddChange !== undefined && !phase) nativeSddStartupBlock = "Receiving agent has no recognized SDD phase";
+		if (retiredSync) nativeSddStartupBlock = "Standalone sync is retired. Return to the parent for native archive selection; archive composes applicable specs.";
+		else if (launchSddChange !== undefined && !phase) nativeSddStartupBlock = "Receiving agent has no recognized SDD phase";
 		const nativeStatusPrompt = phase
 			? await (async () => {
 				try {
 					if (launchSddChange === undefined) {
-						if (phase === "sync") return `\n\n${renderNativeSddPhasePrompt(resolveStartupControllerSddStatus(ctx.cwd, undefined, true, prefs?.artifactStore), phase)}`;
 						const { status } = await readCommandSddStatus("", ctx);
-						if (status.changeName === null || !status.phaseInstructions || status.nextRecommended !== phase) throw new Error(`Native SDD discovery cannot run ${phase}.`);
+						if (status.changeName === null) throw new Error(`Native SDD discovery cannot run ${phase}.`);
+						assertNativeSddPhaseReady(status, phase);
 						return `\n\n${renderNativeSddPhasePrompt(status, phase)}`;
 					}
 					const agentName = `sdd-${phase}`;
@@ -8737,12 +9025,6 @@ function createGentleAiExtensionForTesting(
 						ctx.cwd,
 						agentName,
 						nativeReviewCli,
-						(options) => resolveControllerSddStatus(
-							options.cwd,
-							options.changeName,
-							true,
-							prefs?.artifactStore,
-						),
 					);
 					return `\n\n${renderNativeSddPhasePrompt(startup.status, phase)}`;
 				} catch (error) {
@@ -8750,9 +9032,9 @@ function createGentleAiExtensionForTesting(
 					return `\n\n## Native SDD Status Engine\nSDD selection blocked: ${nativeSddStartupBlock}\nDo not run phase work; return this blocker to the parent.`;
 				}
 			})()
-			: launchSddChange === undefined
+			: nativeSddStartupBlock === undefined
 				? ""
-				: "\n\n## Native SDD Status Engine\nSDD selection blocked: the receiving agent has no recognized SDD phase.\nDo not run phase work; return this blocker to the parent.";
+				: `\n\n## Native SDD Status Engine\nSDD selection blocked: ${nativeSddStartupBlock}\nDo not run phase work; return this blocker to the parent.`;
 		// gentle-pi#661: the RDD status line (and the rest of the gentle prompt)
 		// is built only for the primary session, mirrored on the
 		// reviewContractPrompt condition below -- named/SDD agents never reach
