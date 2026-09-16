@@ -183,7 +183,7 @@ test("npm publication is bound to the exact package tag and triggering commit", 
 		packageJson.repository,
 		{
 			type: "git",
-			url: "git+https://github.com/Gentleman-Programming/gentle-pi.git",
+			url: "git+https://github.com/Gentleman-Programming/gentle-shell.git",
 		},
 		"trusted publishing requires the exact case-sensitive npm repository identity",
 	);
