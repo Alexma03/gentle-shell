@@ -15,7 +15,7 @@ The [v2.6.0 release](https://github.com/Gentleman-Programming/gentle-pi/releases
 - The Agents List and Details views preserve the orchestrator/session hierarchy and completion, abort, and lost-exit history. Parent-child queries and notifications have an explicit handoff path, while model, effort, and usage stay observable per task.
 - Named `/gentle:profiles` atomically route the orchestrator separately from packaged and review roles; see the [technical reference](readme-reference.md#agent-model-profiles) for the profile model.
 
-The source checkout currently prepares `gentle-pi` `2.7.0` with a package-local Gentle AI `v2.9.1` pin; this is not a claim that `2.7.0` is published.
+The source checkout currently prepares `gentle-pi` `3.0.0` with a package-local Gentle AI `v2.9.1` pin; this is not a claim that `3.0.0` is published.
 
 ## Shell interactions and runtime behavior
 
@@ -83,6 +83,12 @@ The separate `session_worktree_register` tool still registers canonical same-clo
 - On a file, `o` or Enter opens the actual current file in `$VISUAL` or `$EDITOR`, with its worktree as cwd. Edits made there are external and are not attributed to the agent.
 - `GENTLE_PI_SHELL_CHANGES_KEY` rebinds the shortcut; `off` disables it. `GENTLE_PI_SHELL_CHANGES_POLL_MS` controls only the open overlay's in-memory refresh. `GENTLE_PI_SHELL_CHANGES_WATCH_MS` no longer enables filesystem polling.
 - No captured changes means no widget and an informational notice; it does not assert that the working tree is clean.
+
+### Command palette
+
+`/gentle:commands` or `alt+k` opens a curated, grouped command menu, OpenCode-style — not a raw listing of every registered extension command. Entries are grouped under Configuration, Session, Diagnostics, SDD, and Skills, each shown by a human label with its shortcut hint where it has one; a command only appears when it is both in the curated set and actually registered. The Search row filters by label, by the underlying command name, and by description; arrows or `ctrl+j`/`ctrl+k` move, enter runs the highlighted entry exactly as if its command had been typed, escape closes. `GENTLE_PI_COMMANDS_KEY` rebinds the shortcut; `off` disables it. Built-in Pi commands are not listed. The default is `alt+k`, not `ctrl+k`, because Pi reserves `ctrl+k` for the editor's delete-to-line-end action.
+
+To use `ctrl+p` like OpenCode, rebind Pi's `app.model.cycleForward` in `~/.pi/agent/keybindings.json` (Pi reserves that action, so an extension cannot take `ctrl+p` while it holds it) and set `GENTLE_PI_COMMANDS_KEY=ctrl+p`.
 
 Subscription usage shows in the bar after the cost, and `/gentle:usage` opens a panel with every window per provider:
 

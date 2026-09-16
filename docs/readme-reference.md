@@ -136,7 +136,7 @@ The stable release is [`v2.6.0`](https://github.com/Gentleman-Programming/gentle
 
 ### Source checkout
 
-This checkout prepares `gentle-pi` `2.7.0`; it is source state, not a published release. Its package-local native runtime pin is Gentle AI `v2.9.1`, distinct from the published `v2.6.0` pairing.
+This checkout prepares `gentle-pi` `3.0.0`; it is source state, not a published release. Its package-local native runtime pin is Gentle AI `v2.9.1`, distinct from the published `v2.6.0` pairing.
 
 The native SDD status consumer accepts both the pinned producer's legacy
 `apply`/`verify`/`remediate`/`archive` instruction record and the classical
@@ -796,6 +796,7 @@ One limitation is worth stating. When a pinned profile omits an agent, that agen
 | `/gentle:sdd-preflight`          | Runs or reuses the lazy SDD preflight for this Pi session.          |
 | `/gentle:models`                 | Opens global model + effort assignment UI. Press `x` to export, `r` to restore saved routing, and `u` to save and update the current profile. |
 | `/gentle:profiles`               | Opens global agent-model profiles: apply live, create, snapshot, duplicate, rename, delete, export, and import. |
+| `/gentle:commands`               | Opens the command palette (default `alt+k`): a curated, grouped menu (Configuration, Session, Diagnostics, SDD, Skills) of registered Gentle commands; search and run by label. |
 | `/gentle:persona`                | Switches global persona mode, with project override support.        |
 | `/gentle:background-subagents`   | Shows or sets the managed background-subagents policy (`status\|enable\|disable`), naming the source that decided it. |
 | `/gentle:telemetry`              | Shows or changes the local Gentle AI telemetry trigger (`status\|enable\|disable\|preview`).  |

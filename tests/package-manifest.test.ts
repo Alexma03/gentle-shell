@@ -183,7 +183,7 @@ test("npm publication is bound to the exact package tag and triggering commit", 
 		packageJson.repository,
 		{
 			type: "git",
-			url: "git+https://github.com/Gentleman-Programming/gentle-pi.git",
+			url: "git+https://github.com/Gentleman-Programming/gentle-shell.git",
 		},
 		"trusted publishing requires the exact case-sensitive npm repository identity",
 	);
@@ -266,8 +266,8 @@ test("package manifest installs pi-pretty through a wrapper without bundling nat
 
 	assert.equal(
 		packageJson.dependencies?.["@heyhuynhgiabuu/pi-pretty"],
-		"0.6.14",
-		"gentle-pi must install the tested pi-pretty version as a normal dependency",
+		"0.6.27",
+		"gentle-pi must install the tested pi-pretty version containing the model-visible result integrity fix",
 	);
 	assert.ok(
 		packageJson.pi?.extensions?.includes("./extensions"),
@@ -279,9 +279,21 @@ test("package manifest installs pi-pretty through a wrapper without bundling nat
 		),
 		"gentle-pi must not reference pnpm-unportable nested node_modules paths",
 	);
+	const piPrettyWrapperPath = join(PACKAGE_ROOT, "extensions", "pi-pretty.ts");
 	assert.ok(
-		existsSync(join(PACKAGE_ROOT, "extensions", "pi-pretty.ts")),
+		existsSync(piPrettyWrapperPath),
 		"gentle-pi must expose pi-pretty through a packaged wrapper extension",
+	);
+	const piPrettyWrapper = readFileSync(piPrettyWrapperPath, "utf8");
+	assert.match(
+		piPrettyWrapper,
+		/import\("@heyhuynhgiabuu\/pi-pretty"\)/,
+		"the wrapper must use the compiled-runtime-safe ESM loader",
+	);
+	assert.doesNotMatch(
+		piPrettyWrapper,
+		/requireFromRealPackage\("@heyhuynhgiabuu\/pi-pretty"\)/,
+		"the wrapper must not resolve the pi-pretty package root through createRequire",
 	);
 	assert.ok(
 		existsSync(join(PACKAGE_ROOT, "extensions", "quiet-tools.ts")),
@@ -1549,22 +1561,22 @@ test("orchestrator routes generic roles without static RDD lens routing", () => 
 	assert.match(core, /this package invents no lifecycle instructions/);
 });
 
-test("pi-pretty wrapper uses real package path resolution for pnpm symlink installs", () => {
+test("pi-pretty wrapper uses cached ESM loading for compiled and pnpm symlink installs", () => {
 	const wrapper = readFileSync(
 		join(PACKAGE_ROOT, "extensions", "pi-pretty.ts"),
 		"utf8",
 	);
 
-	assert.match(wrapper, /realpathSync/);
-	assert.match(wrapper, /createRequire/);
-	assert.match(wrapper, /@heyhuynhgiabuu\/pi-pretty/);
+	assert.doesNotMatch(wrapper, /realpathSync|createRequire/);
+	assert.match(wrapper, /piPrettyExtensionPromise/);
+	assert.match(wrapper, /import\("@heyhuynhgiabuu\/pi-pretty"\)/);
 	assert.match(wrapper, /PI_PRETTY_SUPPRESSED_TOOL_NAMES/);
 	assert.match(wrapper, /quietToolsEnabled/);
 });
 
-test("v2.7.0 release package and runtime stop before publication", () => {
+test("v3.0.0 release package and runtime stop before publication", () => {
 	const packageJson = readPackageJson();
-	assert.equal(packageJson.version, "2.7.0", "the release manifest must remain explicitly pinned to v2.7.0");
+	assert.equal(packageJson.version, "3.0.0", "the release manifest must remain explicitly pinned to v3.0.0");
 	assert.equal(
 		packageJson.scripts?.test,
 		"node --experimental-strip-types --test tests/*.test.ts && pnpm run check:provider-contract && pnpm run test:harness",
