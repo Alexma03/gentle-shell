@@ -339,6 +339,7 @@ export interface SessionTransportRegistry {
 
 export interface SessionTransportListener {
 	readonly registry: SessionTransportRegistry;
+	readonly closesRegistry?: boolean;
 	start(): Promise<void>;
 	close(): Promise<void>;
 }
@@ -473,13 +474,13 @@ function registerChildMessaging(pi: ExtensionAPI, ipc: IpcEndpoint): void {
 
 const posixSessionTransport: SessionTransportFactory = {
 	createRegistry(agentHome) { return SessionPresenceRegistry.create(agentHome); },
-	createListener(registry: SessionPresenceRegistry, sessionId, onNotification) { return new ActiveSessionListener(registry, sessionId, onNotification); },
+	createListener(registry: SessionPresenceRegistry, sessionId, onNotification) { return Object.assign(new ActiveSessionListener(registry, sessionId, onNotification), { closesRegistry: false }); },
 	createClient(registry: SessionPresenceRegistry, sessionId) { return new ActiveSessionClient(registry, sessionId); },
 };
 
 const windowsSessionTransport: SessionTransportFactory = {
 	createRegistry(agentHome, observeWindowsPhase) { return WindowsSessionPresenceRegistry.create(agentHome, observeWindowsPhase); },
-	createListener(registry: WindowsSessionPresenceRegistry, sessionId, onNotification) { return new WindowsActiveSessionListener(registry, sessionId, onNotification); },
+	createListener(registry: WindowsSessionPresenceRegistry, sessionId, onNotification) { return Object.assign(new WindowsActiveSessionListener(registry, sessionId, onNotification), { closesRegistry: true }); },
 	createClient(registry: WindowsSessionPresenceRegistry, sessionId) { return new WindowsActiveSessionClient(registry, sessionId); },
 };
 
@@ -796,15 +797,19 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 	// its session. Before the first session_start there is nothing to scope by.
 	const activeSessionId = (): string | undefined => (sessions === undefined ? undefined : sessions.getSessionId() ?? "");
 	const visibleTasks = (): TaskRecord[] => store.list(activeSessionId());
-	type SessionTransport = { generation: number; sessionId: string; sessionManager: ExtensionContext["sessionManager"]; client: SessionTransportClient; listener: SessionTransportListener };
+	type SessionTransport = { generation: number; sessionId: string; sessionManager: ExtensionContext["sessionManager"]; client: SessionTransportClient; listener: SessionTransportListener; registry: SessionTransportRegistry; close(): Promise<void> };
 	let transportGeneration = 0;
 	let activeSessionTransport: SessionTransport | undefined;
-	let transportStartup: Promise<void> | undefined;
+	const pendingTransportStartups = new Set<Promise<void>>();
 	const validTransportSessionId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 	const closeSessionTransport = async (transport: SessionTransport | undefined) => {
 		if (!transport) return;
-		transport.client.close();
-		await transport.listener.close();
+		await transport.close();
+	};
+	const trackTransportOperation = (operation: Promise<void>) => {
+		pendingTransportStartups.add(operation);
+		operation.then(() => { pendingTransportStartups.delete(operation); }, () => { pendingTransportStartups.delete(operation); });
+		return operation;
 	};
 	const startSessionTransport = (ctx: ExtensionContext) => {
 		const previous = activeSessionTransport;
@@ -815,13 +820,20 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 			let registry: SessionTransportRegistry | undefined;
 			let listener: SessionTransportListener | undefined;
 			let client: SessionTransportClient | undefined;
-			const closeStartupTransport = async () => {
-				client?.close();
-				await listener?.close().catch(() => {});
-				await registry?.close?.().catch(() => {});
+			let closePromise: Promise<void> | undefined;
+			const closeStartupTransport = () => {
+				if (closePromise) return closePromise;
+				closePromise = Promise.resolve().then(async () => {
+					await Promise.allSettled([
+						(async () => { try { client?.close(); } catch {} })(),
+						(async () => { try { await listener?.close(); } catch {} })(),
+						(async () => { try { if (registry && (!listener || !listener.closesRegistry)) await registry.close?.(); } catch {} })(),
+					]);
+				});
+				return closePromise;
 			};
 			try {
-				await closeSessionTransport(previous);
+				if (previous) trackTransportOperation(closeSessionTransport(previous));
 				const sessionId = sessionManager.getSessionId();
 				if (!validTransportSessionId(sessionId) || sessions !== sessionManager || generation !== transportGeneration) return;
 				registry = await sessionTransport.createRegistry(agentHome);
@@ -839,7 +851,7 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 					await closeStartupTransport();
 					return;
 				}
-				const transport = { generation, sessionId, sessionManager, client, listener };
+				const transport = { generation, sessionId, sessionManager, client, listener, registry, close: closeStartupTransport };
 				// The listener deliberately accepts while publishing. Bind its callback
 				// first so a peer accepted in that interval remains current-session work.
 				activeSessionTransport = transport;
@@ -854,15 +866,17 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 				await closeStartupTransport();
 			}
 		})();
-		transportStartup = operation;
-		void operation.finally(() => { if (transportStartup === operation) transportStartup = undefined; });
+		trackTransportOperation(operation);
 		return operation;
 	};
 	const shutdownSessionTransport = async () => {
 		const active = activeSessionTransport;
 		activeSessionTransport = undefined;
 		transportGeneration++;
-		await Promise.allSettled([transportStartup, closeSessionTransport(active)].filter((operation): operation is Promise<void> => operation !== undefined));
+		if (active) await closeSessionTransport(active);
+		while (pendingTransportStartups.size > 0) {
+			await Promise.allSettled([...pendingTransportStartups]);
+		}
 	};
 	const activeTransportFor = (ctx: ExtensionContext) => {
 		const active = activeSessionTransport;
@@ -1637,7 +1651,7 @@ export default function gentleAgents(pi: ExtensionAPI, env: NodeJS.ProcessEnv = 
 				label: ctx.sessionManager.getSessionName?.() || ctx.sessionManager.getCwd().split(/[\\/]/).pop() || "Orchestrator", activity: [] });
 			publishActivity();
 		} catch { presence = undefined; }
-		await startSessionTransport(ctx);
+		void startSessionTransport(ctx);
 	});
 	pi.on("session_shutdown", async () => {
 		completions.dropAll();
