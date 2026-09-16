@@ -112,6 +112,8 @@ Bring in help without losing the thread. Focused package-owned Pi agents can map
 
 **[→ Learn how work is routed](docs/readme-reference.md#how-the-harness-decides-what-to-do)**
 
+- `orchestrator_session_id`, `orchestrator_list`, and `orchestrator_send_message` provide local-profile session notifications. List results advertise IDs only and reachability remains unknown. Sending selects the sole advertised peer or asks the user to choose; a successful ACK means the peer accepted the notification for delivery, not that it read or completed work. This is notification-and-ACK transport only: it has no cross-session queries, offline queue, retries, broadcasts, or read/completion guarantees. On Unix, presence records remain in the profile's private transport directory while socket endpoints use a private, profile-hashed directory below the canonical system temporary directory, keeping endpoint length independent of the profile path and at most 100 encoded bytes. The shared system temporary parent is only validated (current-user-owned without group/other write, or root/current-user-owned, world-writable, and sticky); it is never claimed, permissioned, or cleaned up by gentle-pi. On Windows, the transport selects a package-local PowerShell helper for a Windows named pipe; availability and delivery depend on the helper's bounded startup and pipe checks.
+
 ---
 
 ### ODD — The everyday workflow

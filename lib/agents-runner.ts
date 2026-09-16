@@ -15,6 +15,7 @@ import { isFinished, normalizeRpcEvent, TASK_EVENT, TASK_STATUS, taskLabel, type
 
 export interface ChildLike {
 	pid: number | undefined;
+	connected?: boolean;
 	stdin: Writable;
 	stdout: Readable;
 	stderr: Readable | null | undefined;
@@ -32,7 +33,7 @@ export interface SpawnOptions {
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	detached?: boolean;
-	stdio?: Array<"pipe" | "ignore" | "inherit" | "ipc">;
+	stdio?: Array<"pipe" | "ignore" | "inherit" | "ipc" | "overlapped">;
 }
 
 export type Spawn = (command: string, args: string[], options: SpawnOptions) => ChildLike;
@@ -208,6 +209,7 @@ interface PendingReply {
 
 interface LiveTask {
 	child: ChildLike;
+	sawRunEvent: boolean;
 	observations?: ChildObservationBuffer;
 	observationGuard?: () => boolean;
 	observationPreparation?: () => boolean;
@@ -495,6 +497,7 @@ export class AgentRunner {
 	private launch(id: string, request: TaskRequest): void {
 		const detached = this.processControl.platform !== "win32";
 		const hasParentPermissionChannel = request.authorizeParentStandingReviewPermission !== undefined;
+		const permissionChannelStdio = this.processControl.platform === "win32" ? "overlapped" : "pipe";
 		const env = {
 			...request.env,
 			...(request.extensionPaths ? { [RESEARCH_SELECTION_ENV]: JSON.stringify(request.researchSelection ?? null) } : {}),
@@ -510,7 +513,7 @@ export class AgentRunner {
 				cwd: request.cwd,
 				env,
 				detached,
-				stdio: hasParentPermissionChannel ? ["pipe", "pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe", "ipc"],
+				stdio: hasParentPermissionChannel ? ["pipe", "pipe", "pipe", permissionChannelStdio, "ipc"] : ["pipe", "pipe", "pipe", "ipc"],
 			});
 		} catch (error) {
 			this.store.update(id, { status: TASK_STATUS.RUNNING, startedAt: this.deps.now(), lastStep: "starting" });
@@ -518,7 +521,7 @@ export class AgentRunner {
 			return;
 		}
 		const processGroup = detached && typeof child.pid === "number" && child.pid > 0 ? child.pid : undefined;
-		const live: LiveTask = { child, mutationStarts: new Map(), inFlightTools: new Map(), pending: new Map(), queries: new Map(), replies: new Map(), cancelStall: () => {}, cancelGrace: () => {}, processGroup, terminal: undefined, childExit: undefined, cleanupDeadlineAt: undefined, quarantined: false, nextId: 0, ipcClosed: false, acknowledgedIpcIds: new Set(), acknowledgedIpcOrder: [], stderrTail: "" };
+		const live: LiveTask = { child, sawRunEvent: false, mutationStarts: new Map(), inFlightTools: new Map(), pending: new Map(), queries: new Map(), replies: new Map(), cancelStall: () => {}, cancelGrace: () => {}, processGroup, terminal: undefined, childExit: undefined, cleanupDeadlineAt: undefined, quarantined: false, nextId: 0, ipcClosed: false, acknowledgedIpcIds: new Set(), acknowledgedIpcOrder: [], stderrTail: "" };
 		if (request.prepareResponseObservations) {
 			let ready = false;
 			live.observationPreparation = () => ready;
@@ -612,7 +615,10 @@ export class AgentRunner {
 		live.cancelStall = this.deps.schedule(() => {
 			const lastStep = this.store.get(id)?.lastStep ?? "starting";
 			const minutes = Math.round(budget / 60_000);
-			if (tool === undefined) this.requestStop(id, TASK_STATUS.TIMED_OUT, `stalled for ${minutes} min after: ${lastStep}${this.stderrSuffix(live)}`);
+			if (tool === undefined) {
+				const boundary = lastStep === "prompt accepted" && !live.sawRunEvent ? `; no first run event received for model: ${this.store.get(id)?.model}` : "";
+				this.requestStop(id, TASK_STATUS.TIMED_OUT, `stalled for ${minutes} min after: ${lastStep}${boundary}${this.stderrSuffix(live)}`);
+			}
 			else this.requestStop(id, TASK_STATUS.TIMED_OUT, `stalled for ${minutes} min with tool "${tool}" still running after: ${lastStep}${this.stderrSuffix(live)}`);
 		}, budget);
 	}
@@ -722,8 +728,10 @@ export class AgentRunner {
 		for (const pending of live.replies.values()) pending.resolve(false);
 		live.replies.clear();
 		live.child.channel?.unref?.();
-		try { live.child.disconnect?.(); }
-		catch { /* Channel may already be disconnected. */ }
+		if (live.child.connected !== false) {
+			try { live.child.disconnect?.(); }
+			catch { /* Channel may already be disconnected. */ }
+		}
 	}
 
 	private write(live: LiveTask, payload: Record<string, unknown>): void {
@@ -777,6 +785,7 @@ export class AgentRunner {
 				}
 				continue; // Separate from store persistence, UI totals and notifications.
 			}
+			live.sawRunEvent = true;
 			this.store.apply(id, event, this.deps.now());
 			if (event.type === TASK_EVENT.TOOL_START && event.callId) {
 				live.inFlightTools.set(event.callId, event.name);
